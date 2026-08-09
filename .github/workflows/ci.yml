@@ -15,6 +15,8 @@ jobs:
         with:
           python-version: "3.10"
           cache: pip
+      - if: runner.os == 'macOS'
+        run: brew install libomp
       - run: pip install -r backend/requirements.txt
       - run: python backend/app/ml/train_model.py
       - run: python -c "import json; from backend.promote_model import main; main(json.load(open('backend/app/ml/metrics.json'))['model_version'])"
