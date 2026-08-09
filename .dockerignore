@@ -1,0 +1,14 @@
+.git
+.venv
+.env
+*.db*
+**/__pycache__
+**/.pytest_cache
+frontend/node_modules
+frontend/dist
+backups
+tmp
+.docx_work
+.vite
+~
+~$*
