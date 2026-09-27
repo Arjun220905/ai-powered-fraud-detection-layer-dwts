@@ -159,6 +159,7 @@ class TrustStore:
         return dict(row._mapping)
 
     def initialize(self) -> None:
+        from app import intelligence  # Register additive evidence tables before create_all.
         try:
             metadata.create_all(self.engine)
             existing = {column["name"] for column in inspect(self.engine).get_columns("score_history")}
@@ -326,9 +327,13 @@ class TrustStore:
 
     def rollback_from(self, block_number: int) -> None:
         from app.trust_score.scorer import update_score
+        from app.intelligence import decisions, alerts
 
         try:
             with self.engine.begin() as db:
+                affected = select(decisions.c.id).where(decisions.c.block_number >= block_number)
+                db.execute(delete(alerts).where(alerts.c.id.in_(affected)))
+                db.execute(delete(decisions).where(decisions.c.block_number >= block_number))
                 db.execute(delete(score_history).where(score_history.c.block_number >= block_number))
                 db.execute(delete(chain_blocks).where(chain_blocks.c.number >= block_number))
                 db.execute(delete(app_metadata).where(app_metadata.c.key == "live_cache"))

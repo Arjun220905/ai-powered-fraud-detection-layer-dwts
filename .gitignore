@@ -26,3 +26,6 @@ backend/app/ml/registry/
 backend/benchmark_results.json
 frontend/node_modules/
 frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+/test-results/

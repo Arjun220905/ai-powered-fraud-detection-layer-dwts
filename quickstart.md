@@ -170,21 +170,21 @@ Press `Ctrl+C` in the terminal to stop both services cleanly.
 
 ### Historical demonstration
 
-1. Choose **Simulated**.
-2. Click **Start stream**.
+1. Choose **Dataset replay**.
+2. Click **Start Dataset replay**.
 3. Explain the fraud probability, trust score, decision, and changing chart.
 
 ### Pending demonstration
 
 1. Configure Alchemy in `.env`.
 2. Restart `python dev.py` after changing `.env`.
-3. Choose **Pending** and click **Start stream**.
+3. Choose **Pending watch** and click **Start Pending watch**.
 4. Explain that these transactions are visible to Alchemy but are not confirmed yet.
 
 ### Confirmed blockchain demonstration
 
-1. Choose **Live**.
-2. Click **Start stream**.
+1. Choose **Confirmed chain**.
+2. Click **Start Confirmed chain**.
 3. Explain that the backend reads confirmed blocks and safely resumes from its saved
    block after a restart.
 
@@ -210,6 +210,21 @@ Gas limit: 21000
 ```
 
 Screening does not send the transaction and does not change DWTS.
+
+### Wallet transaction graph
+
+Scroll to **Fraud intelligence**. Dataset replay shows observed wallets as nodes even
+though the historical dataset has no trustworthy sender-to-recipient transactions.
+Choose **Retained confirmed chain** to see real transfer arrows. Enter a full or partial
+address under **Find wallet**, press **Search graph** (or Enter), then select a node to
+open its investigation. Risk filtering, pagination, zoom and pan remain available.
+
+### What-if risk comparison
+
+Enter a sender, an original ETH amount, and a different test amount. You can optionally
+compare a recipient change. Press **Compare risk**. The result separates the raw
+wallet-model probability from the bounded scenario adjustment and never sends or saves
+a transaction.
 
 ## 10. Understanding the result
 

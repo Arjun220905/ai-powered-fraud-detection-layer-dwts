@@ -43,7 +43,7 @@ class TransactionScreenRequest(BaseModel):
     recipient: str | None = Field(
         default=None, pattern=r"^0x[a-fA-F0-9]{40}$"
     )
-    value_eth: float = Field(ge=0)
+    value_eth: float = Field(ge=0, allow_inf_nan=False)
     gas: int = Field(default=21000, ge=21000)
     gas_price_wei: int | None = Field(default=None, ge=0)
     nonce: int | None = Field(default=None, ge=0)
@@ -53,6 +53,11 @@ class TransactionScreenRequest(BaseModel):
     @classmethod
     def normalize_addresses(cls, value: str | None) -> str | None:
         return value.lower() if value else value
+
+
+class SimulationRequest(BaseModel):
+    baseline: TransactionScreenRequest
+    scenario: TransactionScreenRequest
 
 
 class ReviewedLabelRequest(BaseModel):

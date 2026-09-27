@@ -5,7 +5,7 @@
   "reviewed_validation_rows": 0,
   "test_rows": 1968,
   "seed": 42,
-  "model_version": "20260809T080054Z",
+  "model_version": "20260927T082714Z",
   "data_split": {
     "strategy": "StratifiedGroupKFold by wallet address",
     "train_rows": 7873,
@@ -21,7 +21,7 @@
       "recall": 0.867,
       "f1": 0.5,
       "roc_auc": 0.8612,
-      "pr_auc": 0.6612,
+      "pr_auc": 0.6584,
       "brier_score": 0.1984,
       "false_positive_rate": 0.4556,
       "false_negative_rate": 0.133,
@@ -37,40 +37,40 @@
       ]
     },
     "Random Forest": {
-      "accuracy": 0.9792,
-      "precision": 0.9829,
-      "recall": 0.922,
-      "f1": 0.9515,
-      "roc_auc": 0.9984,
-      "pr_auc": 0.9949,
+      "accuracy": 0.9782,
+      "precision": 0.9804,
+      "recall": 0.9197,
+      "f1": 0.9491,
+      "roc_auc": 0.9983,
+      "pr_auc": 0.9948,
       "brier_score": 0.0144,
-      "false_positive_rate": 0.0046,
-      "false_negative_rate": 0.078,
+      "false_positive_rate": 0.0052,
+      "false_negative_rate": 0.0803,
       "confusion_matrix": [
         [
-          1525,
-          7
+          1524,
+          8
         ],
         [
-          34,
-          402
+          35,
+          401
         ]
       ]
     },
     "XGBoost": {
-      "accuracy": 0.9842,
-      "precision": 0.9698,
+      "accuracy": 0.9858,
+      "precision": 0.9766,
       "recall": 0.9587,
-      "f1": 0.9642,
-      "roc_auc": 0.9988,
-      "pr_auc": 0.9961,
-      "brier_score": 0.012,
-      "false_positive_rate": 0.0085,
+      "f1": 0.9676,
+      "roc_auc": 0.9984,
+      "pr_auc": 0.9958,
+      "brier_score": 0.0117,
+      "false_positive_rate": 0.0065,
       "false_negative_rate": 0.0413,
       "confusion_matrix": [
         [
-          1519,
-          13
+          1522,
+          10
         ],
         [
           18,
@@ -99,26 +99,26 @@
     },
     "Random Forest": {
       "accuracy": {
-        "mean": 0.9799,
-        "std": 0.0012
+        "mean": 0.9797,
+        "std": 0.001
       },
       "f1": {
-        "mean": 0.9533,
-        "std": 0.003
+        "mean": 0.9527,
+        "std": 0.0027
       },
       "roc_auc": {
-        "mean": 0.9976,
+        "mean": 0.9975,
         "std": 0.0006
       }
     },
     "XGBoost": {
       "accuracy": {
-        "mean": 0.9867,
-        "std": 0.0009
+        "mean": 0.9873,
+        "std": 0.0005
       },
       "f1": {
-        "mean": 0.9694,
-        "std": 0.0028
+        "mean": 0.971,
+        "std": 0.0004
       },
       "roc_auc": {
         "mean": 0.9984,
@@ -130,13 +130,13 @@
     "method": "RandomizedSearchCV",
     "iterations": 6,
     "folds": 3,
-    "best_cv_roc_auc": 0.9979,
+    "best_cv_roc_auc": 0.998,
     "best_parameters": {
-      "classifier__subsample": 0.8,
+      "classifier__subsample": 1.0,
       "classifier__n_estimators": 220,
-      "classifier__max_depth": 7,
-      "classifier__learning_rate": 0.04,
-      "classifier__colsample_bytree": 0.8
+      "classifier__max_depth": 5,
+      "classifier__learning_rate": 0.12,
+      "classifier__colsample_bytree": 0.9
     }
   },
   "anomaly_detection": {
@@ -149,128 +149,128 @@
   "probability_threshold_analysis": [
     {
       "threshold": 0.1,
-      "false_positives": 25,
-      "false_negatives": 8,
-      "false_positive_rate": 0.0163,
-      "false_negative_rate": 0.0183
+      "false_positives": 22,
+      "false_negatives": 10,
+      "false_positive_rate": 0.0144,
+      "false_negative_rate": 0.0229
     },
     {
       "threshold": 0.2,
-      "false_positives": 18,
-      "false_negatives": 9,
-      "false_positive_rate": 0.0117,
-      "false_negative_rate": 0.0206
+      "false_positives": 17,
+      "false_negatives": 12,
+      "false_positive_rate": 0.0111,
+      "false_negative_rate": 0.0275
     },
     {
       "threshold": 0.3,
-      "false_positives": 16,
-      "false_negatives": 14,
-      "false_positive_rate": 0.0104,
-      "false_negative_rate": 0.0321
+      "false_positives": 11,
+      "false_negatives": 12,
+      "false_positive_rate": 0.0072,
+      "false_negative_rate": 0.0275
     },
     {
       "threshold": 0.4,
-      "false_positives": 13,
-      "false_negatives": 17,
-      "false_positive_rate": 0.0085,
-      "false_negative_rate": 0.039
+      "false_positives": 10,
+      "false_negatives": 14,
+      "false_positive_rate": 0.0065,
+      "false_negative_rate": 0.0321
     },
     {
       "threshold": 0.5,
-      "false_positives": 13,
+      "false_positives": 10,
       "false_negatives": 18,
-      "false_positive_rate": 0.0085,
+      "false_positive_rate": 0.0065,
       "false_negative_rate": 0.0413
     },
     {
       "threshold": 0.6,
-      "false_positives": 11,
-      "false_negatives": 20,
-      "false_positive_rate": 0.0072,
-      "false_negative_rate": 0.0459
+      "false_positives": 10,
+      "false_negatives": 18,
+      "false_positive_rate": 0.0065,
+      "false_negative_rate": 0.0413
     },
     {
       "threshold": 0.7,
       "false_positives": 10,
-      "false_negatives": 23,
+      "false_negatives": 19,
       "false_positive_rate": 0.0065,
-      "false_negative_rate": 0.0528
+      "false_negative_rate": 0.0436
     },
     {
       "threshold": 0.8,
-      "false_positives": 9,
-      "false_negatives": 23,
-      "false_positive_rate": 0.0059,
-      "false_negative_rate": 0.0528
+      "false_positives": 10,
+      "false_negatives": 20,
+      "false_positive_rate": 0.0065,
+      "false_negative_rate": 0.0459
     },
     {
       "threshold": 0.9,
-      "false_positives": 6,
-      "false_negatives": 25,
-      "false_positive_rate": 0.0039,
-      "false_negative_rate": 0.0573
+      "false_positives": 8,
+      "false_negatives": 21,
+      "false_positive_rate": 0.0052,
+      "false_negative_rate": 0.0482
     }
   ],
   "top_feature_importance": [
     {
       "feature": "Total ERC20 tnxs",
-      "importance": 0.260189
+      "importance": 0.27879
     },
     {
       "feature": "Time Diff between first and last (Mins)",
-      "importance": 0.179526
-    },
-    {
-      "feature": "ERC20 total Ether received",
-      "importance": 0.067808
+      "importance": 0.160368
     },
     {
       "feature": "total ether received",
-      "importance": 0.049361
+      "importance": 0.088199
     },
     {
       "feature": "ERC20 min val rec",
-      "importance": 0.038358
-    },
-    {
-      "feature": "min val sent",
-      "importance": 0.038347
+      "importance": 0.049363
     },
     {
       "feature": "total transactions (including tnx to create contract",
-      "importance": 0.035795
+      "importance": 0.045344
     },
     {
-      "feature": "ERC20 uniq rec addr",
-      "importance": 0.031483
-    },
-    {
-      "feature": "Unique Received From Addresses",
-      "importance": 0.024669
-    },
-    {
-      "feature": "ERC20 total ether sent",
-      "importance": 0.023679
-    },
-    {
-      "feature": "Avg min between received tnx",
-      "importance": 0.020152
+      "feature": "ERC20 total Ether received",
+      "importance": 0.041308
     },
     {
       "feature": "ERC20 max val rec",
-      "importance": 0.018936
+      "importance": 0.036222
+    },
+    {
+      "feature": "ERC20 total ether sent",
+      "importance": 0.035066
+    },
+    {
+      "feature": "min val sent",
+      "importance": 0.032726
+    },
+    {
+      "feature": "Unique Received From Addresses",
+      "importance": 0.029772
+    },
+    {
+      "feature": "Avg min between received tnx",
+      "importance": 0.021356
     },
     {
       "feature": "avg val received",
-      "importance": 0.018856
+      "importance": 0.018338
+    },
+    {
+      "feature": "ERC20 uniq sent token name",
+      "importance": 0.016705
     },
     {
       "feature": "Sent tnx",
-      "importance": 0.018132
+      "importance": 0.015886
     },
     {
-      "feature": "ERC20 min val sent",
-      "importance": 0.015921
+      "feature": "Received Tnx",
+      "importance": 0.015082
     }
   ],
   "claims": {

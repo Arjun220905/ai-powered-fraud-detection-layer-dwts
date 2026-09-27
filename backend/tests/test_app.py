@@ -178,7 +178,12 @@ def test_chain_state_is_persistent_idempotent_and_reversible():
         store.close()
 
 
-def test_health_and_stream():
+def test_health_and_stream(monkeypatch):
+    # Integration tests must not inherit live providers or credentials from .env.
+    monkeypatch.setattr('dotenv.load_dotenv', lambda *args, **kwargs: False)
+    for name in ('WEB3_WS_PROVIDER_URL', 'WEB3_WS_PROVIDER_URLS', 'DATABASE_URL',
+                 'ADMIN_API_KEY', 'REVIEWER_API_KEY', 'ALERT_WEBHOOK_URL', 'ALERT_SMTP_HOST'):
+        monkeypatch.setenv(name, '')
     previous = os.environ.get("WEB3_PROVIDER_URL")
     previous_urls = os.environ.pop("WEB3_PROVIDER_URLS", None)
     previous_key = os.environ.get("API_KEY")
@@ -246,6 +251,14 @@ def test_health_and_stream():
                 })
                 assert preflight.status_code == 200
                 assert preflight.headers["access-control-allow-origin"] == "http://localhost:5173"
+                unauthorized = client.post(
+                    "/api/screen-transaction",
+                    headers={"Origin": "http://localhost:5173", "X-API-Key": "invalid"},
+                    json={"sender": "0x" + "a" * 40, "value_eth": 1, "gas": 21000},
+                )
+                assert unauthorized.status_code == 401
+                assert unauthorized.headers["access-control-allow-origin"] == "http://localhost:5173"
+                assert "Operations and access" in unauthorized.json()["detail"]
                 pending_feed = client.get("/api/blockchain/pending-stream")
                 assert pending_feed.status_code == 200
                 assert pending_feed.json()["configured"] is False

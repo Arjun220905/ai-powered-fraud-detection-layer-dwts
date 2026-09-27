@@ -46,8 +46,8 @@ See [docs/architecture.md](docs/architecture.md) for the score formula and thres
 1. Clone and enter the repository.
 
    ```powershell
-   git clone <your-repository-url> fraud-detection-dwts
-   cd fraud-detection-dwts
+   git clone https://github.com/Arjun220905/ai-powered-fraud-detection-layer-dwts.git
+   cd ai-powered-fraud-detection-layer-dwts
    ```
 
 2. Confirm `data/transaction_dataset.csv` exists. If it does not, download the public
@@ -125,7 +125,10 @@ cd backend
 python -m pytest -q
 python benchmark.py --requests 100
 cd ../frontend
+npm test
 npm run build
+npx playwright install chromium
+npm run test:e2e
 ```
 
 ## Model performance
@@ -161,7 +164,7 @@ incremental score update in SQLite. After the last row, replay wraps to the begi
 `POST /api/stream/reset` resets only the replay cursor; wallet history remains stateful.
 
 Set `WEB3_PROVIDER_URL` in `.env` to an Infura/Alchemy HTTPS endpoint, then choose
-**Live Ethereum** in the dashboard. A background task ingests confirmed blocks,
+**Confirmed chain** in the dashboard. A background task ingests confirmed blocks,
 backfills a configurable startup window, decodes native ETH and ERC-20 transfers, and
 persists block events and wallet scores in SQLite. It resumes from the saved cursor
 after restart and rolls back orphaned data when the stored chain tip changes. Catch-up
@@ -191,6 +194,25 @@ without bound.
 that controls whether a proposed transaction is submitted. Its model scope is explicitly
 reported as `wallet_behavior_preview`: the available dataset cannot support an honest
 transaction-trained classifier.
+
+## Fraud intelligence workspace
+
+The dashboard includes trend analytics, explainable model evidence, high-risk wallet
+clusters, alert review, wallet behavior profiles, paged investigation replay, model
+monitoring, and a read-only What-if Risk Simulator. The interface supports persistent
+light and dark themes and responsive layouts down to 320px.
+
+The wallet graph works for every evidence source. Dataset replay, pending, and API
+sources show their observed wallets as searchable, risk-colored nodes. **Retained
+confirmed chain** additionally draws real sender-to-recipient arrows from persisted
+transactions; relationships are never invented for sources that do not contain them.
+Use **Search graph** after entering a full or partial address, filter by risk, then use
+pagination, zoom, pan, or select a node to open its investigation.
+
+The What-if Risk Simulator keeps the raw wallet-model probability visible and adds a
+documented, bounded scenario adjustment for changed ETH amount or recipient. It does
+not broadcast a transaction or save a score. See [docs/intelligence.md](docs/intelligence.md)
+and [docs/ui-testing.md](docs/ui-testing.md) for evidence scope and verification.
 
 ## What happens, in plain language
 
@@ -260,6 +282,11 @@ Model promotion also enforces minimum ROC-AUC/F1 and maximum false-positive-rate
 - `GET /api/blockchain/status`: provider failover and ingestion leadership
 - `GET /api/blockchain/pending-stream`: pending lifecycle and advisory decisions
 - `POST /api/screen-transaction`: pre-broadcast transaction screening
+- `GET /api/intelligence/overview`: bounded trends, graph, clusters, anomalies, and monitoring
+- `GET /api/intelligence/wallet/{address}`: behavior profile and investigation timeline
+- `GET /api/intelligence/wallet/{address}/history`: stable paged evidence history
+- `POST /api/intelligence/simulate`: read-only baseline/scenario risk comparison
+- `GET /api/intelligence/alerts`: persistent high-risk dashboard alerts
 - `GET /api/operations/metrics`: counts, block lag, provider state, and drift warnings
 - `GET /api/operations/audit`: recent API audit records
 - `POST/GET /api/labels`: reviewed live outcomes and feature snapshots
@@ -274,8 +301,10 @@ backend/app/ml/           feature preparation, training, saved model and metrics
 backend/app/trust_score/  DWTS plus SQLite/PostgreSQL persistence and operations
 backend/app/stream/       row-by-row historical replay
 backend/app/blockchain/   confirmed-block reader and live feature aggregation
+backend/app/intelligence.py bounded analytics, graph, alerts and investigation evidence
 backend/tests/            score and API smoke tests
-frontend/src/             React/Tailwind dashboard
+frontend/src/             React dashboard, graph, simulator and theme system
+frontend/tests/           Playwright responsive and interaction regressions
 data/                     Kaggle CSV and provenance notes
 docs/                     architecture details
 ```

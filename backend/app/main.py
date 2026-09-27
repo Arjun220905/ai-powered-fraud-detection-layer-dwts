@@ -36,11 +36,12 @@ from app.blockchain.live_features import LiveWalletFeatures
 from app.ml.feature_engineering import row_to_frame, rows_to_frame
 from app.models import (
     PredictionRequest, PredictionResponse, ReviewedLabelRequest,
-    TransactionScreenRequest,
+    TransactionScreenRequest, SimulationRequest,
 )
 from app.stream.simulator import StreamSimulator
 from app.trust_score.db import TrustStore
 from app.trust_score.scorer import risk_action, update_score
+from app import intelligence
 
 ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT / ".env")
@@ -92,7 +93,7 @@ def required_role(path: str, method: str) -> str | None:
         return "admin"
     if path.startswith("/api/labels"):
         return "reviewer"
-    if path == "/api/screen-transaction":
+    if path in {"/api/screen-transaction", "/api/intelligence/simulate"}:
         return "viewer"
     if path.startswith("/api/") and method not in {"GET", "HEAD", "OPTIONS"}:
         return "reviewer"
@@ -163,6 +164,7 @@ async def lifespan(app: FastAPI):
             tasks.append(asyncio.create_task(start_live_services(app)))
         else:
             app.state.live_features_ready = True
+        tasks.append(asyncio.create_task(intelligence.alert_worker(app.state)))
     except (OSError, KeyError, ValueError, RuntimeError) as exc:
         raise RuntimeError(f"Startup failed: {exc}") from exc
     try:
@@ -179,7 +181,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Fraud Detection DWTS API", version="1.0.0", lifespan=lifespan)
 origins = [item.strip() for item in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",") if item.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
 
 
 async def start_live_services(app: FastAPI) -> None:
@@ -219,7 +220,7 @@ async def security_rate_limit_and_audit(request: Request, call_next):
         if configured_api_keys() and minimum_role:
             role = request_role(request)
             if role is None:
-                response = JSONResponse({"detail": "Valid X-API-Key required"}, status_code=401)
+                response = JSONResponse({"detail": "Valid X-API-Key required. Add a viewer key under Operations and access."}, status_code=401)
             elif ROLE_LEVEL[role] < ROLE_LEVEL[minimum_role]:
                 response = JSONResponse(
                     {"detail": f"{minimum_role} role required"}, status_code=403
@@ -248,6 +249,11 @@ async def security_rate_limit_and_audit(request: Request, call_next):
                 )
             except RuntimeError as exc:
                 logger.error("Audit write failed: %s", exc)
+
+
+# Register CORS after the security middleware so authentication and rate-limit
+# responses also receive browser-readable CORS headers.
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
 
 
 def predict_probability(state, values: dict) -> float:
@@ -318,18 +324,26 @@ def send_alert(state, kind: str, message: str) -> bool:
         return False
 
 
-def infer_and_update(request: Request, address: str, values: dict) -> tuple:
+def infer_and_update(request: Request, address: str, values: dict, source: str = "api") -> tuple:
     started = time.perf_counter()
     try:
         probability = predict_probability(request.app.state, values)
         current = request.app.state.store.current_score(address)
         result = update_score(current, probability)
         request.app.state.store.save(address, result.score, probability, result.action)
+        explanation = explain_prediction(request.app.state, values)
+        latency = round((time.perf_counter() - started) * 1000, 3)
+        anomaly = anomaly_score(request.app.state, values)
+        drift = drift_score(request.app.state, values)
+        intelligence.record(request.app.state, source, address, dict(
+            fraud_probability=round(probability, 4), trust_score=result.score,
+            risk_action=result.action, explanation=explanation, latency_ms=latency,
+            anomaly_score=anomaly, drift_score=drift,
+            drift_warning=drift is not None and drift >= request.app.state.drift_threshold,
+            model_version=request.app.state.model_version))
         return (
             round(probability, 4), result.score, result.action,
-            explain_prediction(request.app.state, values),
-            round((time.perf_counter() - started) * 1000, 3),
-            anomaly_score(request.app.state, values),
+            explanation, latency, anomaly,
         )
     except (ValueError, RuntimeError, OSError) as exc:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {exc}") from exc
@@ -399,6 +413,7 @@ def bounded_catchup_head(first: int, confirmed_head: int, limit: int) -> int:
 
 
 def process_live_block(app: FastAPI, block: dict) -> dict:
+    started = time.perf_counter()
     app.state.store.save_block(block, persisted_events(block))
     app.state.store.reconcile_pending(
         [transaction["hash"] for transaction in block["transactions"]], block["number"]
@@ -462,6 +477,11 @@ def process_live_block(app: FastAPI, block: dict) -> dict:
             and predictions[address]["drift_score"] >= app.state.drift_threshold
         )
     app.state.store.save_many(score_rows)
+    elapsed = (time.perf_counter() - started) * 1000 / max(1, len(senders))
+    for address, assessment in predictions.items():
+        intelligence.record(app.state, 'live', address, assessment,
+                            key=f"live:{block['hash']}:{address}", block_number=block['number'],
+                            timestamp=block['timestamp'], latency_ms=elapsed)
 
     displayed = block["transactions"][-app.state.live_display_limit:]
     items = []
@@ -663,6 +683,10 @@ async def pending_poller(app: FastAPI) -> None:
                     "status": "pending",
                 })
                 app.state.pending_processed += 1
+                await run_in_threadpool(
+                    intelligence.record, app.state, 'pending', transaction['from'], assessment,
+                    key=f"pending:{transaction['hash']}", transaction_hash=transaction['hash'],
+                    recipient=transaction.get('to'), value_eth=transaction['value_eth'])
                 if app.state.pending_processed % 100 == 0:
                     await run_in_threadpool(
                         app.state.store.expire_pending, app.state.pending_ttl_seconds
@@ -838,6 +862,79 @@ async def model_metrics():
         raise HTTPException(status_code=503, detail=f"Metrics are unavailable: {exc}") from exc
 
 
+@app.get('/api/intelligence/overview')
+async def intelligence_overview(request: Request, source: str = Query('simulated', pattern='^(simulated|live|pending|api)$')):
+    return await run_in_threadpool(intelligence.overview, request.app.state.store, source)
+
+
+@app.get('/api/intelligence/wallet/{address}')
+async def intelligence_wallet(address: str, request: Request):
+    import re
+    if not re.fullmatch(r'0x[a-fA-F0-9]{40}', address):
+        raise HTTPException(422, 'A full Ethereum wallet address is required')
+    return await run_in_threadpool(intelligence.investigation, request.app.state, address.lower())
+
+
+@app.get('/api/intelligence/wallet/{address}/history')
+async def intelligence_history(address: str, request: Request, page: int = Query(1, ge=1),
+                               page_size: int = Query(50, ge=1, le=100), until: float | None = Query(None, ge=0)):
+    import math
+    import re
+    if not re.fullmatch(r'0x[a-fA-F0-9]{40}', address) or (until is not None and not math.isfinite(until)):
+        raise HTTPException(422, 'A valid wallet address and finite timestamp are required')
+    return await run_in_threadpool(intelligence.history_page, request.app.state.store, address.lower(), page, page_size, until)
+
+
+@app.get('/api/intelligence/alerts')
+async def intelligence_alerts(request: Request):
+    return await run_in_threadpool(intelligence.alert_list, request.app.state.store)
+
+
+@app.post('/api/intelligence/alerts/{identifier}/acknowledge', status_code=204)
+async def acknowledge_alert(identifier: str, request: Request):
+    if not await run_in_threadpool(intelligence.acknowledge, request.app.state.store, identifier):
+        raise HTTPException(404, 'Alert not found')
+
+
+@app.post('/api/intelligence/simulate')
+async def simulate_risk(payload: SimulationRequest, request: Request):
+    if payload.baseline.sender != payload.scenario.sender:
+        raise HTTPException(422, 'Use the same sender for baseline and scenario')
+    async with request.app.state.live_lock:
+        baseline = await screen_proposed_transaction(payload.baseline, request)
+        scenario = await screen_proposed_transaction(payload.scenario, request)
+
+    # Tree thresholds can give two different transfers the same wallet-model
+    # probability. Preserve that raw output and add a transparent, bounded
+    # scenario-only adjustment for the inputs this tool explicitly compares.
+    amount_adjustment = 0.12 * math.tanh(math.log(
+        (payload.scenario.value_eth + 1) / (payload.baseline.value_eth + 1)
+    ))
+    recipient_adjustment = 0.05 if payload.scenario.recipient != payload.baseline.recipient else 0.0
+    baseline['model_probability'] = baseline['fraud_probability']
+    scenario['model_probability'] = scenario['fraud_probability']
+    adjusted_probability = max(0.0, min(
+        1.0, scenario['model_probability'] + amount_adjustment + recipient_adjustment
+    ))
+    scenario['fraud_probability'] = round(adjusted_probability, 4)
+
+    if scenario['observed_events'] >= request.app.state.live_min_wallet_events:
+        current = request.app.state.store.current_score(payload.scenario.sender)
+        projected = update_score(current, adjusted_probability)
+        scenario['projected_trust_score'] = projected.score
+        scenario['risk_action'] = projected.action
+
+    return dict(baseline=baseline, scenario=scenario,
+                probability_delta=round(scenario['fraud_probability'] - baseline['fraud_probability'], 4),
+                trust_delta=round(scenario['projected_trust_score'] - baseline['projected_trust_score'], 2),
+                adjustments=dict(
+                    amount=round(amount_adjustment, 4),
+                    recipient=round(recipient_adjustment, 4),
+                    model=round(scenario['model_probability'] - baseline['model_probability'], 4),
+                ),
+                scope='Read-only estimate: wallet-model output plus a bounded amount adjustment (up to ±12 points) and a 5-point recipient-change adjustment. No score or transaction is saved.')
+
+
 @app.get("/api/operations/metrics")
 async def operational_metrics(request: Request):
     metrics = await run_in_threadpool(request.app.state.store.operational_metrics)
@@ -944,7 +1041,7 @@ async def stream_next(request: Request, delay_ms: int = Query(0, ge=0, le=5000))
         address = str(row["Address"]).lower()
         label = int(row["FLAG"])
         probability, score, action, explanation, latency, anomaly = await run_in_threadpool(
-            infer_and_update, request, address, row
+            infer_and_update, request, address, row, 'simulated'
         )
         preview = {name: row.get(name) for name in request.app.state.features[:5]}
         return PredictionResponse(
