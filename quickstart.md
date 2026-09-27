@@ -118,45 +118,31 @@ matching provider is configured.
 
 ## 7. Install the project for the first time
 
-Prerequisites:
-
-- Python 3.10 or newer
-- Node.js 20.19 or newer
-- npm
+Prerequisites: Python 3.10–3.13, Node.js 20.19.x or 22.12+, and npm 10+.
+On macOS, install the XGBoost runtime once with `brew install libomp`.
 
 Windows PowerShell:
 
 ```powershell
-cd fraud-detection-dwts
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r backend\requirements.txt
-npm --prefix frontend ci
+cd ai-powered-fraud-detection-layer-dwts
+py -3 dev.py --check
 ```
 
 macOS/Linux:
 
 ```bash
-cd fraud-detection-dwts
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r backend/requirements.txt
-npm --prefix frontend ci
+cd ai-powered-fraud-detection-layer-dwts
+python3 dev.py --check
 ```
 
-The trained model is generated locally because binary model files are not committed:
-
-```text
-python backend/app/ml/train_model.py
-```
+The check command creates `.venv`, installs the pinned backend and frontend packages,
+and trains the local model because binary model files are not committed.
 
 ## 8. Start everything with one command
 
-```text
-python dev.py
-```
-
-The launcher automatically uses the project's virtual environment.
+Run `py -3 dev.py` on Windows or `python3 dev.py` on macOS/Linux. The launcher
+automatically uses the project's virtual environment and skips setup work that is
+already current.
 
 Open:
 
@@ -271,8 +257,8 @@ outcomes are collected and separately validated.
 
 ### `No module named dotenv`
 
-Use the current `dev.py`; it automatically switches to `.venv`. If `.venv` does not
-exist, complete the installation steps above.
+Use the current `dev.py`; it creates and uses `.venv` automatically. If installation
+was interrupted, rerun `python dev.py --check`.
 
 ### Port 8000 or 5173 is already in use
 
@@ -304,14 +290,15 @@ up in safe bounded batches. Leave the backend running; it resumes automatically.
 ## 14. Run the checks
 
 ```text
-cd backend
-python -m pytest -q
-python benchmark.py --requests 100
-cd ../frontend
-npm run build
+python dev.py --check
+.venv/bin/python -m pytest -q backend/tests
+npm --prefix frontend test
+npm --prefix frontend run build
 ```
 
-Expected backend test result: `8 passed`.
+On Windows, use `.\.venv\Scripts\python.exe` instead of `.venv/bin/python`.
+The current expected results are 12 backend tests and 4 frontend unit tests; the
+14-case Playwright suite is available through `npm --prefix frontend run test:e2e`.
 
 ## 15. Honest limitations
 

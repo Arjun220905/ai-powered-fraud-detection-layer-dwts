@@ -36,10 +36,11 @@ See [docs/architecture.md](docs/architecture.md) for the score formula and thres
 
 ## Prerequisites
 
-- Python 3.10 or newer
-- Node.js 20.19 or newer and npm
+- Python 3.10 through 3.13
+- Node.js 20.19.x or 22.12+ and npm 10+
 - Windows, macOS, or Linux
 - About 1 GB free space for Python and frontend packages
+- macOS only: Homebrew and `brew install libomp` for XGBoost
 
 ## Setup (under 10 minutes on a typical connection)
 
@@ -50,37 +51,36 @@ See [docs/architecture.md](docs/architecture.md) for the score formula and thres
    cd ai-powered-fraud-detection-layer-dwts
    ```
 
-2. Confirm `data/transaction_dataset.csv` exists. If it does not, download the public
-   Kaggle Ethereum Fraud Detection Dataset and follow [data/README.md](data/README.md).
+2. On macOS, install XGBoost's OpenMP runtime once. Windows needs no equivalent step.
 
-3. Create and activate a virtual environment.
+   ```bash
+   brew install libomp
+   ```
+
+3. Run the cross-platform launcher from the project root.
 
    Windows PowerShell:
 
    ```powershell
-   python -m venv .venv
-   .\.venv\Scripts\Activate.ps1
+   py -3 dev.py
    ```
 
    macOS/Linux:
 
    ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
+   python3 dev.py
    ```
 
-4. Install, train, and start from the project root. Use `Copy-Item .env.example .env`
-   on Windows or `cp .env.example .env` on macOS/Linux.
+   On the first run, `dev.py` creates `.venv`, installs the pinned Python requirements,
+   installs the lockfile-pinned frontend packages, and trains the local model. Later runs
+   skip unchanged setup steps. The same terminal runs the API at `http://localhost:8000`
+   and dashboard at `http://localhost:5173`. Press `Ctrl+C` to stop both.
 
-   ```text
-   python -m pip install -r backend/requirements.txt
-   python backend/app/ml/train_model.py
-   npm --prefix frontend ci
-   python dev.py
-   ```
+   To prepare and validate the environment without starting servers, run
+   `python dev.py --check` (or `py -3 dev.py --check` on Windows).
 
-   The same terminal now runs the API at `http://localhost:8000` and dashboard at
-   `http://localhost:5173`. Press `Ctrl+C` to stop both.
+The dataset is included. If `data/transaction_dataset.csv` is missing, restore it from
+the repository or follow [data/README.md](data/README.md).
 
 Configuration is read from environment variables. The launcher works without `.env`;
 copy `.env.example` to `.env` only when you need custom paths, providers, or limits.
@@ -88,8 +88,8 @@ Never commit the `.env` file.
 
 ### PostgreSQL and multiple backend instances
 
-SQLite remains the zero-setup default. For a shared production database, set a strong
-`POSTGRES_PASSWORD`, uncomment `DATABASE_URL` in `.env`, and run:
+SQLite remains the zero-setup default. For a shared production database, create `.env`
+from `.env.example`, set a strong `POSTGRES_PASSWORD`, uncomment `DATABASE_URL`, and run:
 
 ```powershell
 docker compose up -d postgres
@@ -118,18 +118,22 @@ python backend/backup_database.py
 
 ## Tests
 
-Train the model first, then run:
+Prepare the environment once, then run:
 
 ```powershell
-cd backend
-python -m pytest -q
-python benchmark.py --requests 100
-cd ../frontend
+python dev.py --check
+.\.venv\Scripts\python.exe -m pytest -q backend\tests
+.\.venv\Scripts\python.exe backend\benchmark.py --requests 100
+cd frontend
 npm test
 npm run build
 npx playwright install chromium
 npm run test:e2e
 ```
+
+On macOS/Linux, replace `.\.venv\Scripts\python.exe` with `.venv/bin/python`.
+GitHub Actions executes the bootstrap, backend tests, frontend unit/build checks on
+Windows, macOS, and Linux; browser regression tests run on Linux Chromium.
 
 ## Model performance
 

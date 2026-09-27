@@ -1,6 +1,6 @@
 # Dashboard verification
 
-The light interface uses one shared spacing and color system in `frontend/src/index.css`.
+The light and dark interfaces use one shared spacing and color system in `frontend/src/index.css`.
 Desktop panel pairs have equal-width columns and stretch to a shared row height. At 850px
 and below, panels stack in reading order. Controls remain keyboard-accessible and motion
 respects the operating-system preference.

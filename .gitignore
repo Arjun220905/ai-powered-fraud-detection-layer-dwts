@@ -21,6 +21,7 @@ __pycache__/
 .coverage
 htmlcov/
 .venv/
+.dwts-*.sha256
 backend/app/ml/model.pkl
 backend/app/ml/registry/
 backend/benchmark_results.json
