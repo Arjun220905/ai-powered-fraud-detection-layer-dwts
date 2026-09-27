@@ -13,7 +13,8 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parent
-PYTHON = ROOT / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+VENV = ROOT / ".venv"
+PYTHON = VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 REQUIREMENTS = ROOT / "backend" / "requirements.txt"
 PACKAGE_LOCK = ROOT / "frontend" / "package-lock.json"
 MODEL = ROOT / "backend" / "app" / "ml" / "model.pkl"
@@ -42,12 +43,13 @@ def ensure_python() -> None:
     if not PYTHON.is_file():
         if not (3, 10) <= sys.version_info[:2] < (3, 14):
             fail("Python 3.10 through 3.13 is required to create .venv.")
-        run_step([sys.executable, "-m", "venv", str(ROOT / ".venv")], "Creating Python virtual environment")
-    if Path(sys.executable).resolve() != PYTHON.resolve():
-        os.execv(str(PYTHON), [str(PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]])
+        run_step([sys.executable, "-m", "venv", str(VENV)], "Creating Python virtual environment")
+    if Path(sys.prefix).resolve() != VENV.resolve():
+        command = [str(PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]]
+        raise SystemExit(subprocess.call(command, cwd=ROOT))
     if not (3, 10) <= sys.version_info[:2] < (3, 14):
         fail("The existing .venv must use Python 3.10 through 3.13.")
-    marker = ROOT / ".venv" / ".dwts-requirements.sha256"
+    marker = VENV / ".dwts-requirements.sha256"
     expected = digest(REQUIREMENTS)
     if not marker.is_file() or marker.read_text(encoding="utf-8").strip() != expected:
         run_step([str(PYTHON), "-m", "pip", "install", "-r", str(REQUIREMENTS)], "Installing Python requirements")
