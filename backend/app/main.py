@@ -573,9 +573,22 @@ async def ingest_live_blocks(app: FastAPI) -> None:
             batch_start,
             min(batch_start + app.state.live_catchup_concurrency, confirmed_head + 1),
         )
-        blocks = await asyncio.gather(*(
-            run_in_threadpool(block_transactions, number, None) for number in numbers
-        ))
+        # Full Ethereum blocks can contain hundreds of token transfers. Fetching
+        # several of those expensive RPC payloads at once can temporarily exhaust
+        # a provider's rate limit and stall the whole catch-up at the same block.
+        # Preserve ordered processing and retry an individual transient failure.
+        blocks = []
+        for number in numbers:
+            for attempt in range(3):
+                try:
+                    blocks.append(
+                        await run_in_threadpool(block_transactions, number, None)
+                    )
+                    break
+                except ConnectionError:
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(0.5 * (attempt + 1))
         for block in blocks:
             previous = await run_in_threadpool(app.state.store.last_block)
             if previous and block["parent_hash"] != previous["hash"]:

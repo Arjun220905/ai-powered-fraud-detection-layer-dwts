@@ -96,11 +96,10 @@ def ensure_model() -> None:
 
 
 def ensure_port_available(port: int, service: str) -> None:
-    """Fail before startup instead of letting a dev server silently choose another port."""
+    """Fail only when an active listener owns the expected local port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
+        sock.settimeout(0.25)
+        if sock.connect_ex(("127.0.0.1", port)) == 0:
             fail(
                 f"Port {port} is already in use, so {service} cannot start. "
                 "Stop the existing project process and run 'python3 dev.py' again."
