@@ -4,6 +4,7 @@ import hashlib
 import os
 import signal
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -94,6 +95,18 @@ def ensure_model() -> None:
         run_step([str(PYTHON), str(ROOT / "backend" / "app" / "ml" / "train_model.py")], "Training the local fraud model")
 
 
+def ensure_port_available(port: int, service: str) -> None:
+    """Fail before startup instead of letting a dev server silently choose another port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            fail(
+                f"Port {port} is already in use, so {service} cannot start. "
+                "Stop the existing project process and run 'python3 dev.py' again."
+            )
+
+
 ensure_python()
 
 from dotenv import load_dotenv
@@ -108,6 +121,9 @@ def main() -> int:
         print("\nReady: Python, frontend packages, dataset, and model are available.", flush=True)
         return 0
 
+    ensure_port_available(8000, "the backend")
+    ensure_port_available(5173, "the frontend")
+
     backend = [str(PYTHON), "-m", "uvicorn", "app.main:app", "--app-dir", "backend"]
     certificate, key = os.getenv("SSL_CERTFILE"), os.getenv("SSL_KEYFILE")
     if bool(certificate) != bool(key):
@@ -116,28 +132,49 @@ def main() -> int:
         backend.extend(["--ssl-certfile", certificate, "--ssl-keyfile", key])
     commands = [
         backend,
-        [npm, "--prefix", str(ROOT / "frontend"), "run", "dev"],
+        [
+            npm,
+            "--prefix",
+            str(ROOT / "frontend"),
+            "run",
+            "dev",
+            "--",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "5173",
+            "--strictPort",
+        ],
     ]
-    print("Starting backend and frontend; waiting for the health check...", flush=True)
+    print("Starting backend and frontend; waiting for both services...", flush=True)
     group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
     processes = [subprocess.Popen(command, cwd=ROOT, **group) for command in commands]
     try:
         protocol = "https" if certificate else "http"
-        health_url = f"{protocol}://localhost:8000/health"
+        health_url = f"{protocol}://127.0.0.1:8000/health"
+        frontend_url = "http://127.0.0.1:5173"
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            return_code = processes[0].poll()
-            if return_code is not None:
-                return return_code or 1
+            for process, service in zip(processes, ("Backend", "Frontend")):
+                return_code = process.poll()
+                if return_code is not None:
+                    raise SystemExit(f"{service} exited during startup (exit code {return_code}).")
             try:
                 with urlopen(health_url, timeout=1) as response:
-                    if response.status == 200:
-                        break
+                    backend_ready = response.status == 200
             except (OSError, URLError):
-                time.sleep(0.25)
+                backend_ready = False
+            try:
+                with urlopen(frontend_url, timeout=1) as response:
+                    frontend_ready = response.status == 200
+            except (OSError, URLError):
+                frontend_ready = False
+            if backend_ready and frontend_ready:
+                break
+            time.sleep(0.25)
         else:
-            raise SystemExit("Backend did not become healthy within 60 seconds")
-        print(f"\nReady: {health_url}  Frontend: http://localhost:5173", flush=True)
+            raise SystemExit("Backend and frontend did not both become ready within 60 seconds")
+        print(f"\nReady: {health_url}  Frontend: {frontend_url}", flush=True)
         print("Press Ctrl+C to stop both.\n", flush=True)
         while all(process.poll() is None for process in processes):
             time.sleep(0.5)
