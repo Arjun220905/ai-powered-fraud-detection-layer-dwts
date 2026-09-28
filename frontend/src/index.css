@@ -81,6 +81,9 @@ a { color: var(--trust-accent); }
 .workspace-guide p { margin: 3px 0 0; color: var(--text-secondary); max-width: 90ch; }
 .source-notice { padding: 14px 18px; border: 1px solid var(--line); background: var(--ledger); border-radius: 8px; display: flex; align-items: center; gap: 12px; margin: 16px 0; }
 .notice-error { color: var(--danger); border-color: var(--error-line); background: var(--error-surface); }
+.access-notice { color: var(--text-secondary); margin: 0 18px 18px; }
+.access-notice a { color: var(--trust-accent); font-weight: 700; }
+.access-notice code { color: var(--paper); font-size: .92em; }
 .decision-rail { display: grid; grid-template-columns: 1fr 1.6fr .8fr 140px; background: var(--ledger); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-bottom: 24px; }
 .decision-rail>div { padding: 22px 20px; min-width: 0; border-right: 1px solid var(--line); }
 .rail-identity,.rail-decision { display: flex; justify-content: center; flex-direction: column; align-items: flex-start; }

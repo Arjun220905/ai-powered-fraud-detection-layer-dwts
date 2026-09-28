@@ -8,7 +8,7 @@ const percent = value => value == null ? 'Unavailable' : `${(value * 100).toFixe
 const signedPoints = value => { const points = Number(value || 0) * 100; return `${points > 0 ? '+' : ''}${points.toFixed(1)} points` }
 const date = stamp => new Date(stamp * 1000).toLocaleString()
 
-export default function Intelligence({ api, apiKey, mode, screen, latest }) {
+export default function Intelligence({ api, apiKey, authRequired, mode, screen, latest }) {
   const [overview, setOverview] = useState(null)
   const [source, setSource] = useState(mode)
   const [alerts, setAlerts] = useState([])
@@ -134,6 +134,7 @@ export default function Intelligence({ api, apiKey, mode, screen, latest }) {
     <div className="intel-grid">
       <article className="panel"><Heading title="Alert center" /><p className="intel-note">Latest 100 high-risk observations across sources. Reviewer access can acknowledge. Configure webhook or SMTP delivery on the server.</p><div className="intel-scroll">{alerts.length ? alerts.map(alert => <div className="intel-alert" key={alert.id}><button onClick={() => { setSelected(alert.event); inspect(alert.event.address) }}>{short(alert.event.address)} · {percent(alert.event.fraud_probability)}</button><small>{alert.event.source} · {date(alert.timestamp)} · {Object.entries(alert.delivery).map(([key, value]) => `${key}: ${value}`).join(', ') || 'Dashboard only / delivery pending'}</small><button disabled={alert.acknowledged} onClick={() => acknowledge(alert.id)}>{alert.acknowledged ? 'Acknowledged' : 'Acknowledge'}</button></div>) : <Empty text="No high-risk alerts recorded." />}</div></article>
       <article className="panel simulator-panel"><Heading title="What-if risk simulator" /><p className="intel-note">Preview how a different amount or recipient could affect this wallet. It never sends a transaction or changes the trust score.</p><form className="simulator-form" onSubmit={simulate}>
+        {authRequired && !apiKey && <p className="source-notice access-notice">Risk comparison is protected. Paste your <code>API_KEY</code> from <code>.env</code> under <a href="#operations">Operations and access</a>, then compare again.</p>}
         <div className="simulator-step"><span aria-hidden="true">1</span><div><strong>Choose a wallet</strong><p>Enter the sender you want to test.</p></div></div>
         <label className="field">Sender wallet<input required aria-label="Simulator sender wallet" pattern="0x[a-fA-F0-9]{40}" placeholder="0x… full wallet address" value={simulation.sender} onChange={event => editSimulation('sender', event.target.value)}/></label>
         {(screen.sender || latest?.address) && <button className="secondary-action" type="button" onClick={() => loadSimulation(/^0x[a-fA-F0-9]{40}$/.test(screen.sender) ? screen : latest)}>Use {/^0x[a-fA-F0-9]{40}$/.test(screen.sender) ? 'screening form' : 'latest wallet'}</button>}

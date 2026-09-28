@@ -142,7 +142,8 @@ and trains the local model because binary model files are not committed.
 
 Run `py -3 dev.py` on Windows or `python3 dev.py` on macOS/Linux. The launcher
 automatically uses the project's virtual environment and skips setup work that is
-already current.
+already current. Running `python3 dev.py` from inside `frontend/` also works and
+forwards to the same project launcher.
 
 Open:
 

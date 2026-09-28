@@ -761,6 +761,7 @@ async def blockchain_status(request: Request):
     last = await run_in_threadpool(request.app.state.store.last_block)
     return {
         **status,
+        "authentication_required": bool(configured_api_keys()),
         "ingestion": {
             "running": provider_configured(),
             "leader": request.app.state.live_leader,

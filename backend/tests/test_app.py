@@ -203,6 +203,7 @@ def test_health_and_stream(monkeypatch):
                 status = client.get("/api/blockchain/status").json()
                 assert status["configured"] is False
                 assert status["connected"] is False
+                assert status["authentication_required"] is True
                 assert status["ingestion"]["running"] is False
                 assert client.get("/api/blockchain/latest-block").status_code == 503
                 response = client.get("/api/stream/next")

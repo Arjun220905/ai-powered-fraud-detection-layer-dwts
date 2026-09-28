@@ -71,6 +71,9 @@ See [docs/architecture.md](docs/architecture.md) for the score formula and thres
    python3 dev.py
    ```
 
+   If your terminal is already inside `frontend/`, the same `python3 dev.py` command
+   forwards to the project launcher automatically.
+
    On the first run, `dev.py` creates `.venv`, installs the pinned Python requirements,
    installs the lockfile-pinned frontend packages, and trains the local model. Later runs
    skip unchanged setup steps. The same terminal runs the API at `http://localhost:8000`

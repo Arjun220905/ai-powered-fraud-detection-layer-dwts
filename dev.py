@@ -46,7 +46,11 @@ def ensure_python() -> None:
         run_step([sys.executable, "-m", "venv", str(VENV)], "Creating Python virtual environment")
     if Path(sys.prefix).resolve() != VENV.resolve():
         command = [str(PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]]
-        raise SystemExit(subprocess.call(command, cwd=ROOT))
+        try:
+            return_code = subprocess.call(command, cwd=ROOT)
+        except KeyboardInterrupt:
+            return_code = 0
+        raise SystemExit(return_code)
     if not (3, 10) <= sys.version_info[:2] < (3, 14):
         fail("The existing .venv must use Python 3.10 through 3.13.")
     marker = VENV / ".dwts-requirements.sha256"
