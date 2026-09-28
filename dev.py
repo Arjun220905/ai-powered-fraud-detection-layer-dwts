@@ -107,6 +107,14 @@ def ensure_port_available(port: int, service: str) -> None:
             )
 
 
+def url_is_ready(url: str) -> bool:
+    try:
+        with urlopen(url, timeout=1) as response:
+            return response.status == 200
+    except (OSError, URLError):
+        return False
+
+
 ensure_python()
 
 from dotenv import load_dotenv
@@ -121,6 +129,15 @@ def main() -> int:
         print("\nReady: Python, frontend packages, dataset, and model are available.", flush=True)
         return 0
 
+    existing_backend = url_is_ready("http://127.0.0.1:8000/health")
+    existing_frontend = url_is_ready("http://127.0.0.1:5173")
+    if existing_backend and existing_frontend:
+        print(
+            "Project is already running: Backend: http://127.0.0.1:8000  "
+            "Frontend: http://127.0.0.1:5173",
+            flush=True,
+        )
+        return 0
     ensure_port_available(8000, "the backend")
     ensure_port_available(5173, "the frontend")
 
@@ -159,16 +176,8 @@ def main() -> int:
                 return_code = process.poll()
                 if return_code is not None:
                     raise SystemExit(f"{service} exited during startup (exit code {return_code}).")
-            try:
-                with urlopen(health_url, timeout=1) as response:
-                    backend_ready = response.status == 200
-            except (OSError, URLError):
-                backend_ready = False
-            try:
-                with urlopen(frontend_url, timeout=1) as response:
-                    frontend_ready = response.status == 200
-            except (OSError, URLError):
-                frontend_ready = False
+            backend_ready = url_is_ready(health_url)
+            frontend_ready = url_is_ready(frontend_url)
             if backend_ready and frontend_ready:
                 break
             time.sleep(0.25)
