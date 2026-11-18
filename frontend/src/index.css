@@ -1,6 +1,7 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Base defaults used by the dashboard components. */
+h1,h2,h3,h4,p,figure,dl,dd { margin: 0; }
+svg,img { display: block; vertical-align: middle; }
+[hidden] { display: none; }
 
 :root {
   color-scheme: light;
@@ -79,6 +80,9 @@ a { color: var(--trust-accent); }
 .mode-switcher span { font-size: 15px; }.mode-switcher small { font-size: 14px; color: var(--text-secondary); font-weight: 400; margin-top: 5px; line-height: 1.4; }
 .workspace-guide { padding: 16px 20px; border-left: 3px solid var(--trust-accent); background: var(--guide); border-radius: 0 8px 8px 0; margin-bottom: 24px; }
 .workspace-guide p { margin: 3px 0 0; color: var(--text-secondary); max-width: 90ch; }
+.chain-health { margin-bottom: 18px; }
+.chain-health h2 { font-size: 20px; padding: 14px 18px; }
+.chain-health > p { margin: 8px 18px; }
 .source-notice { padding: 14px 18px; border: 1px solid var(--line); background: var(--ledger); border-radius: 8px; display: flex; align-items: center; gap: 12px; margin: 16px 0; }
 .notice-error { color: var(--danger); border-color: var(--error-line); background: var(--error-surface); }
 .access-notice { color: var(--text-secondary); margin: 0 18px 18px; }

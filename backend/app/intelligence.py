@@ -205,7 +205,11 @@ def deliver_alerts(state):
     if not state.store.acquire_lease('intelligence_alert_delivery', state.worker_id, 120):
         return
     with state.store.engine.connect() as db:
-        pending = db.execute(select(alerts).where(alerts.c.attempts < 3, alerts.c.completed == 0).order_by(alerts.c.timestamp).limit(5)).all()
+        pending = db.execute(
+            select(alerts).join(decisions, alerts.c.id == decisions.c.id)
+            .where(alerts.c.attempts < 3, alerts.c.completed == 0, decisions.c.source != 'simulated')
+            .order_by(alerts.c.timestamp).limit(5)
+        ).all()
     for row in pending:
         delivery = json.loads(row.delivery)
         event = json.loads(row.payload)

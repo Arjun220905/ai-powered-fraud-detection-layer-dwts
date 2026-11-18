@@ -50,11 +50,14 @@ def provider_configured() -> bool:
     return bool(provider_urls())
 
 
+def hex_data(value: bytes | str) -> str:
+    return "0x" + (value.hex() if isinstance(value, bytes) else value).lower().removeprefix("0x")
+
+
 def _transaction(web3, transaction) -> dict:
-    data = transaction.get("input", "0x")
-    data = data.hex() if hasattr(data, "hex") else str(data)
+    data = hex_data(transaction.get("input", "0x"))
     return {
-        "hash": transaction["hash"].hex() if hasattr(transaction["hash"], "hex") else transaction["hash"],
+        "hash": hex_data(transaction["hash"]),
         "from": transaction["from"],
         "to": transaction.get("to"),
         "value_eth": str(web3.from_wei(transaction["value"], "ether")),
@@ -81,6 +84,10 @@ def _run(operation):
             web3 = Web3(Web3.HTTPProvider(urls[index], request_kwargs={"timeout": 10}))
             if not web3.is_connected():
                 raise ConnectionError("connection check failed")
+            chain_id = web3.eth.chain_id
+            if chain_id != 1:
+                errors.append(f"provider {index + 1}: expected Mainnet (1), got chain {chain_id}")
+                continue
             result = operation(web3)
             _active_provider = index
             return result
@@ -91,6 +98,10 @@ def _run(operation):
 
 def current_block_number() -> int:
     return int(_run(lambda web3: web3.eth.block_number))
+
+
+def block_hash(number: int) -> str:
+    return _run(lambda web3: hex_data(web3.eth.get_block(number)["hash"]))
 
 
 def provider_status() -> dict:
@@ -142,7 +153,7 @@ def _block_transactions(web3, block_identifier: int | str, limit: int | None) ->
         token = log["address"].lower()
         decimals, decimals_source = _decimals(web3, token)
         transfers.append({
-            "transaction_hash": log["transactionHash"].hex(),
+            "transaction_hash": hex_data(log["transactionHash"]),
             "log_index": int(log["logIndex"]),
             "token_address": token,
             "from": f"0x{log['topics'][1].hex()[-40:]}",

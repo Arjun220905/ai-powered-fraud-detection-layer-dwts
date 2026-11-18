@@ -76,8 +76,12 @@ See [docs/architecture.md](docs/architecture.md) for the score formula and thres
 
    On the first run, `dev.py` creates `.venv`, installs the pinned Python requirements,
    installs the lockfile-pinned frontend packages, and trains the local model. Later runs
-   skip unchanged setup steps. The same terminal runs the API at `http://localhost:8000`
-   and dashboard at `http://localhost:5173`. Press `Ctrl+C` to stop both.
+   skip unchanged setup steps. Open the **Frontend** URL printed after **Ready**.
+   The API defaults to `http://127.0.0.1:8000`. The dashboard uses port 5173 or
+   falls back to 5174 if 5173 is occupied. Set `DWTS_BACKEND_PORT` or
+   `DWTS_FRONTEND_PORT` in `.env` or the shell to use other ports. The launcher
+   configures the dashboard API URL and local browser origins for those ports.
+   Press `Ctrl+C` in the original launcher terminal to stop both.
 
    To prepare and validate the environment without starting servers, run
    `python dev.py --check` (or `py -3 dev.py --check` on Windows).
@@ -136,7 +140,12 @@ npm run test:e2e
 
 On macOS/Linux, replace `.\.venv\Scripts\python.exe` with `.venv/bin/python`.
 GitHub Actions executes the bootstrap, backend tests, frontend unit/build checks on
-Windows, macOS, and Linux; browser regression tests run on Linux Chromium.
+Windows, macOS, and Linux. Linux also runs the mocked browser regressions and
+`npm --prefix frontend run test:stack`, which starts `python3 dev.py` with a
+temporary SQLite database and exercises the real frontend and API without provider
+credentials. CI gates runtime dependency advisories and reports development advisories.
+The Vite development server is for local use. The production build is served from
+`frontend/dist` or through the included frontend container.
 
 ## Model performance
 
@@ -166,18 +175,23 @@ requests/second with 24.831 ms p99 latency; its reproducible output is stored in
 
 ## Simulated, pending, and confirmed streams
 
-`GET /api/stream/next` advances one CSV row, runs real model inference, and persists an
-incremental score update in SQLite. After the last row, replay wraps to the beginning.
-`POST /api/stream/reset` resets only the replay cursor; wallet history remains stateful.
+`POST /api/stream/next` advances one CSV row and records a simulated observation.
+Each replay score starts from a baseline of 70 and stays separate from operational
+wallet scores. Simulated alerts appear in the dashboard only. Replay wraps after
+the last row. `POST /api/stream/reset` resets the
+cursor. Existing historical score rows were preserved because older replay and API
+rows did not store distinct source identifiers. Use a new database for a clean split
+from legacy scores.
 
 Set `WEB3_PROVIDER_URL` in `.env` to an Infura/Alchemy HTTPS endpoint, then choose
 **Confirmed chain** in the dashboard. A background task ingests confirmed blocks,
 backfills a configurable startup window, decodes native ETH and ERC-20 transfers, and
 persists block events and wallet scores in SQLite. It resumes from the saved cursor
-after restart and rolls back orphaned data when the stored chain tip changes. Catch-up
-RPC calls run concurrently up to `LIVE_CATCHUP_CONCURRENCY`, while database commits
-remain in canonical block order. `LIVE_MAX_CATCHUP_BLOCKS` bounds each recovery cycle;
-larger gaps continue in later cycles instead of permanently failing startup.
+after restart and rolls back orphaned data, including affected pending statuses.
+Only Mainnet providers (chain ID 1) are accepted. Catch-up fetches, retries, and
+saves one block at a time in canonical order. `LIVE_MAX_CATCHUP_BLOCKS` bounds each
+cycle. **Confirmed chain health** refreshes every 10 seconds and shows provider head,
+last processed block, block age, lag behind the confirmation-adjusted head, and errors.
 
 Live feature recovery runs in the background, so a large chain history cannot block the
 independent dataset replay or FastAPI startup. The zero-setup SQLite configuration keeps
@@ -345,4 +359,4 @@ docs/                     architecture details
 - Chen & Guestrin, *XGBoost: A Scalable Tree Boosting System* (2016)
 - *Near Real-Time Ethereum Fraud Detection Using Explainable AI in Blockchain
   Networks*, Applied Sciences 15(19), 2025, DOI `10.3390/app151910841`
-- FastAPI, scikit-learn, XGBoost, React, Vite, Tailwind CSS, and Recharts documentation
+- FastAPI, scikit-learn, XGBoost, React, Vite, and Recharts documentation

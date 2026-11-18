@@ -107,10 +107,11 @@ someone else. If it is exposed, create a replacement key in Alchemy.
 These are different:
 
 - `WEB3_PROVIDER_URL` contains the **Alchemy key** used to read Ethereum.
-- `API_KEY` protects this project's screening, review, audit, and operations APIs.
+- `VIEWER_API_KEY` lets you screen and simulate. `API_KEY` is the fallback admin key.
 
-After opening the dashboard, copy only the value after `API_KEY=` from `.env` into
-the dashboard's **API key** box. The browser keeps it only for that browser session.
+After opening the dashboard, paste the value of your configured role key into
+**Operations and access**. Use a viewer key for screening. The browser keeps the
+key in the current tab's session.
 The interface is labelled **DWTS** and is organized as a decision console: start a
 source at the top, inspect its event ledger and model evidence, then use screening or
 wallet casework below. Pending and confirmed-chain buttons remain disabled until their
@@ -145,11 +146,11 @@ automatically uses the project's virtual environment and skips setup work that i
 already current. Running `python3 dev.py` from inside `frontend/` also works and
 forwards to the same project launcher.
 
-Open:
-
-- Dashboard: [http://localhost:5173](http://localhost:5173)
-- Backend health: [http://localhost:8000/health](http://localhost:8000/health)
-- API documentation: [http://localhost:8000/docs](http://localhost:8000/docs)
+Open the **Frontend** URL printed after **Ready**. The dashboard uses port 5173 by
+default and tries 5174 if 5173 is occupied. The backend defaults to port 8000.
+Open [backend health](http://127.0.0.1:8000/health) or
+[API documentation](http://127.0.0.1:8000/docs) using the backend port printed by
+your launcher if you changed it.
 
 Press `Ctrl+C` in the terminal to stop both services cleanly.
 
@@ -159,7 +160,8 @@ Press `Ctrl+C` in the terminal to stop both services cleanly.
 
 1. Choose **Dataset replay**.
 2. Click **Start Dataset replay**.
-3. Explain the fraud probability, trust score, decision, and changing chart.
+3. Explain the fraud probability and simulated trust score. Replay records
+   demo observations separately from operational wallet scores.
 
 ### Pending demonstration
 
@@ -170,16 +172,19 @@ Press `Ctrl+C` in the terminal to stop both services cleanly.
 
 ### Confirmed blockchain demonstration
 
-1. Choose **Confirmed chain**.
-2. Click **Start Confirmed chain**.
-3. Explain that the backend reads confirmed blocks and safely resumes from its saved
-   block after a restart.
+1. Set an Ethereum Mainnet HTTPS provider in `.env` and restart the launcher.
+2. Choose **Confirmed chain**.
+3. Click **Start Confirmed chain**.
+4. Read **Confirmed chain health** for the provider head, last processed block,
+   its age, and blocks behind the confirmed head. If ingestion reports an error,
+   the panel flags the cached feed as potentially stale.
 
 ### Pre-broadcast screening
 
 This checks a transaction before an application broadcasts it.
 
-1. Enter the dashboard `API_KEY` from `.env`.
+1. In **Operations and access**, enter a viewer key if access protection is enabled.
+   Use the local `API_KEY` only if that is the credential you configured.
 2. Enter the sender wallet address.
 3. Enter the destination wallet or contract address.
 4. Enter the ETH amount.
@@ -261,9 +266,12 @@ outcomes are collected and separately validated.
 Use the current `dev.py`; it creates and uses `.venv` automatically. If installation
 was interrupted, rerun `python dev.py --check`.
 
-### Port 8000 or 5173 is already in use
+### A launcher port is already in use
 
-Return to the old project terminal and press `Ctrl+C`, then run `python dev.py` once.
+For a previous DWTS instance, press `Ctrl+C` in the terminal that started it.
+For a different application, leave it running and choose a free port. For example,
+on macOS/Linux run `DWTS_BACKEND_PORT=18000 DWTS_FRONTEND_PORT=15173 python3 dev.py`.
+You can also set those two variables in the project's `.env` before launching.
 
 ### Provider shows disconnected
 
@@ -281,12 +289,15 @@ Return to the old project terminal and press `Ctrl+C`, then run `python dev.py` 
 
 ### `401` or `Valid X-API-Key required`
 
-Copy the value after `API_KEY=` from `.env` into the dashboard's API-key field.
+Enter the value of your configured key in **Operations and access**. A viewer key
+can screen transactions and run simulations. Reviewer and admin tasks require the
+corresponding role. `API_KEY` is the fallback admin credential.
 
 ### Live mode is catching up
 
 The database remembers the last confirmed block. After several days offline, it catches
-up in safe bounded batches. Leave the backend running; it resumes automatically.
+up in bounded cycles and saves each block before fetching the next. Leave the
+backend running and use **Confirmed chain health** to see whether lag is decreasing.
 
 ## 14. Run the checks
 
@@ -295,11 +306,14 @@ python dev.py --check
 .venv/bin/python -m pytest -q backend/tests
 npm --prefix frontend test
 npm --prefix frontend run build
+npm --prefix frontend run test:e2e
+npm --prefix frontend run test:stack
 ```
 
 On Windows, use `.\.venv\Scripts\python.exe` instead of `.venv/bin/python`.
-The current expected results are 12 backend tests and 4 frontend unit tests; the
-14-case Playwright suite is available through `npm --prefix frontend run test:e2e`.
+Install Chromium with `cd frontend && npx playwright install chromium` before running
+the browser checks. Run the real-stack test on macOS or Linux. It uses a temporary
+database and test ports 15173 and 18000.
 
 ## 15. Honest limitations
 

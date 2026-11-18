@@ -11,6 +11,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from app.trust_score.scorer import update_score
 
 metadata = MetaData()
 wallets = Table(
@@ -222,15 +223,30 @@ class TrustStore:
         except SQLAlchemyError as exc:
             raise RuntimeError(f"Could not read wallet scores: {exc}") from exc
 
-    def _save_rows(self, predictions: list[dict]) -> int:
+    def _lock_score_writes(self, db) -> None:
+        if self.backend == "sqlite":
+            db.exec_driver_sql("BEGIN IMMEDIATE")
+        else:
+            db.exec_driver_sql("LOCK TABLE wallets IN SHARE ROW EXCLUSIVE MODE")
+
+    def _save_rows(self, predictions: list[dict], *, calculate: bool = False) -> int:
         saved = 0
         with self.engine.begin() as db:
+            self._lock_score_writes(db)
             for prediction in predictions:
                 source = prediction.get("source_key")
-                if source and db.execute(
-                    select(score_history.c.id).where(score_history.c.source_key == source)
-                ).first():
+                existing = db.execute(select(score_history.c.score, score_history.c.action)
+                                      .where(score_history.c.source_key == source)).first() if source else None
+                if existing:
+                    prediction.update(score=existing.score, action=existing.action)
                     continue
+                address = prediction["address"]
+                current = db.scalar(select(wallets.c.score).where(wallets.c.address == address))
+                if calculate:
+                    baseline = 70.0 if current is None else current
+                    result = update_score(baseline, prediction["probability"]) if prediction["applied"] else None
+                    prediction.update(score=result.score if result else baseline,
+                                      action=result.action if result else "Observe")
                 db.execute(insert(score_history).values(
                     address=prediction["address"],
                     score=prediction["score"],
@@ -240,10 +256,7 @@ class TrustStore:
                     block_number=prediction.get("block_number"),
                     applied=bool(prediction.get("applied", True)),
                 ))
-                exists = db.execute(
-                    select(wallets.c.address).where(wallets.c.address == prediction["address"])
-                ).first()
-                if exists:
+                if current is not None:
                     db.execute(
                         update(wallets).where(wallets.c.address == prediction["address"]).values(
                             score=prediction["score"], updated_at=func.current_timestamp()
@@ -276,6 +289,14 @@ class TrustStore:
         except SQLAlchemyError as exc:
             raise RuntimeError(f"Could not save wallet-score batch: {exc}") from exc
 
+    def apply_predictions(self, predictions: list[dict]) -> None:
+        """Read and update scores under one database write lock."""
+        if predictions:
+            try:
+                self._save_rows(predictions, calculate=True)
+            except SQLAlchemyError as exc:
+                raise RuntimeError("Could not apply wallet predictions") from exc
+
     def save_block(self, block: dict, events: list[dict]) -> None:
         try:
             with self.engine.begin() as db:
@@ -292,12 +313,13 @@ class TrustStore:
         except SQLAlchemyError as exc:
             raise RuntimeError(f"Could not persist block {block['number']}: {exc}") from exc
 
-    def last_block(self) -> dict | None:
+    def last_block(self, processed_only: bool = False) -> dict | None:
         try:
             with self.engine.connect() as db:
-                row = db.execute(
-                    select(chain_blocks).order_by(chain_blocks.c.number.desc()).limit(1)
-                ).first()
+                query = select(chain_blocks).order_by(chain_blocks.c.number.desc()).limit(1)
+                if processed_only:
+                    query = query.where(chain_blocks.c.processed.is_(True))
+                row = db.execute(query).first()
                 return self._dict(row) if row else None
         except SQLAlchemyError as exc:
             raise RuntimeError(f"Could not read chain cursor: {exc}") from exc
@@ -326,11 +348,14 @@ class TrustStore:
             raise RuntimeError(f"Could not read persisted chain events: {exc}") from exc
 
     def rollback_from(self, block_number: int) -> None:
-        from app.trust_score.scorer import update_score
         from app.intelligence import decisions, alerts
 
         try:
             with self.engine.begin() as db:
+                self._lock_score_writes(db)
+                db.execute(update(pending_transactions)
+                           .where(pending_transactions.c.confirmed_block >= block_number)
+                           .values(status="pending", confirmed_block=None, updated_at=time.time()))
                 affected = select(decisions.c.id).where(decisions.c.block_number >= block_number)
                 db.execute(delete(alerts).where(alerts.c.id.in_(affected)))
                 db.execute(delete(decisions).where(decisions.c.block_number >= block_number))
@@ -394,23 +419,31 @@ class TrustStore:
         except (SQLAlchemyError, TypeError) as exc:
             raise RuntimeError(f"Could not save metadata {key}: {exc}") from exc
 
-    def wallet(self, address: str) -> dict | None:
+    def wallet(self, address: str, page: int | None = None, page_size: int = 12) -> dict | None:
         try:
             with self.engine.connect() as db:
                 row = db.execute(select(wallets).where(wallets.c.address == address)).first()
                 if not row:
                     return None
-                history = db.execute(
-                    select(
+                query = select(
                         score_history.c.id, score_history.c.score,
                         score_history.c.fraud_probability, score_history.c.action,
                         score_history.c.source_key, score_history.c.block_number,
                         score_history.c.applied, score_history.c.created_at,
-                    ).where(score_history.c.address == address).order_by(score_history.c.id)
-                )
+                    ).where(score_history.c.address == address)
+                pagination = {}
+                if page is not None:
+                    total = db.scalar(select(func.count()).select_from(score_history)
+                                      .where(score_history.c.address == address))
+                    page = min(page, max(1, (total + page_size - 1) // page_size))
+                    pagination = {"history_total": total, "history_page": page}
+                    query = query.order_by(score_history.c.id.desc()).offset((page - 1) * page_size).limit(page_size)
+                else:
+                    query = query.order_by(score_history.c.id)
                 return {
                     **self._dict(row),
-                    "history": [self._dict(item) for item in history],
+                    **pagination,
+                    "history": [self._dict(item) for item in db.execute(query)],
                 }
         except SQLAlchemyError as exc:
             raise RuntimeError(f"Could not read wallet history: {exc}") from exc

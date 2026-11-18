@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from tempfile import TemporaryDirectory
 
 import pandas as pd
@@ -7,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.blockchain.live_features import LiveWalletFeatures
 from app.blockchain.pending_listener import pending_provider_url, pending_provider_urls
-from app.blockchain.web3_listener import decode_contract_call, provider_status
+from app.blockchain.web3_listener import _transaction, decode_contract_call, provider_status
 from app.ml.train_model import grouped_split_indices
 from app.trust_score.db import TrustStore
 from app.trust_score.scorer import convergence_steps, update_score
@@ -26,6 +27,64 @@ def test_score_drops_for_high_fraud_probability():
     assert result.action == "Delay"
     assert convergence_steps(70, 1) <= 10
     assert convergence_steps(70, 0) <= 10
+
+
+def test_scores_are_applied_in_database_order(tmp_path):
+    first = TrustStore(str(tmp_path / "shared.db"))
+    second = TrustStore(str(tmp_path / "shared.db"))
+    try:
+        row = {"address": "0xa", "probability": 0.9, "applied": True}
+        with ThreadPoolExecutor(2) as pool:
+            operations = [pool.submit(store.apply_predictions, [dict(row)]) for store in (first, second)]
+            for operation in operations:
+                operation.result()
+        expected = update_score(update_score(70, .9).score, .9).score
+        assert first.current_score("0xa") == expected
+        page = first.wallet("0xa", page=1, page_size=1)
+        assert page["history_total"] == 2
+        assert [item["score"] for item in page["history"]] == [expected]
+    finally:
+        first.close()
+        second.close()
+
+
+def test_confirmed_rpc_transaction_uses_canonical_hex():
+    from hexbytes import HexBytes
+    from web3 import Web3
+
+    tx = _transaction(Web3(), {
+        "input": HexBytes("0xa9059cbb" + "0" * 24 + "1" * 40 + "0" * 63 + "a"),
+        "hash": HexBytes("0x" + "2" * 64),
+        "from": "0x" + "3" * 40, "value": 0, "gas": 21000, "nonce": 0,
+    })
+    assert tx["hash"] == "0x" + "2" * 64
+    assert tx["input_selector"] == "0xa9059cbb"
+    assert tx["contract_call"]["raw_amount"] == "10"
+
+
+def test_confirmed_rpc_skips_wrong_network(monkeypatch):
+    from types import SimpleNamespace
+    import web3
+    from app.blockchain import web3_listener
+
+    class Provider:
+        HTTPProvider = staticmethod(lambda url, **kwargs: url)
+
+        def __init__(self, url):
+            self.eth = SimpleNamespace(chain_id=1 if "mainnet" in url else 11155111, block_number=20)
+
+        def is_connected(self):
+            return True
+
+    monkeypatch.setattr(web3, "Web3", Provider)
+    monkeypatch.setattr(web3_listener, "_active_provider", 0)
+    monkeypatch.setenv("WEB3_PROVIDER_URLS", "https://testnet.example,https://mainnet.example")
+    status = provider_status()
+    assert status["connected"] and status["chain_id"] == 1 and status["active_provider"] == 2
+    monkeypatch.setenv("WEB3_PROVIDER_URLS", "https://testnet.example")
+    status = provider_status()
+    assert not status["connected"]
+    assert "expected Mainnet" in status["error"]
 
 
 def test_blockchain_status_without_provider():
@@ -160,6 +219,10 @@ def test_chain_state_is_persistent_idempotent_and_reversible():
         assert store.pending()[0]["input"] == "0x"
         assert store.reconcile_pending([pending["hash"]], 10) == 1
         assert store.pending()[0]["status"] == "confirmed"
+        store.rollback_from(10)
+        assert store.pending()[0]["status"] == "pending"
+        assert store.pending()[0]["confirmed_block"] is None
+        assert store.reconcile_pending([pending["hash"]], 11) == 1
         assert store.prune_pending(86400, 0) == 1
         assert store.pending() == []
         store.audit("GET", "/health", 200, "127.0.0.1", 1.5)
@@ -206,12 +269,14 @@ def test_health_and_stream(monkeypatch):
                 assert status["authentication_required"] is True
                 assert status["ingestion"]["running"] is False
                 assert client.get("/api/blockchain/latest-block").status_code == 503
-                response = client.get("/api/stream/next")
+                assert client.get("/api/stream/next").status_code == 405
+                response = client.post("/api/stream/next")
                 assert response.status_code == 200
                 assert 0 <= response.json()["trust_score"] <= 100
                 assert response.json()["explanation"]
                 assert response.json()["model_version"]
                 assert response.json()["latency_ms"] >= 0
+                assert client.get("/api/wallets/" + response.json()["address"]).status_code == 404
                 if response.json()["anomaly_score"] is not None:
                     assert 0 <= response.json()["anomaly_score"] <= 1
                 assert client.get("/api/wallets?query=0x").status_code == 200

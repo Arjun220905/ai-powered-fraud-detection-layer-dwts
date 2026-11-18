@@ -47,7 +47,7 @@ def test_evidence_graph_alerts_and_rollback(tmp_path):
                 send.return_value.__enter__.return_value.status = 200
                 intelligence.deliver_alerts(state)
                 intelligence.deliver_alerts(state)
-                assert send.call_count == 3
+                assert send.call_count == 2  # Only live alerts are delivered in this fixture.
         store.rollback_from(10)
         assert intelligence.overview(store, 'live')['observations'] == 0
         assert intelligence.overview(store, 'live')['graph']['edges'] == []
@@ -99,7 +99,7 @@ def test_api_simulation_is_read_only_and_validated(tmp_path, monkeypatch):
         assert client.get('/api/intelligence/wallet/' + A + '/history?page=0').status_code == 422
         assert client.get('/api/intelligence/wallet/' + A + '/history?page_size=101').status_code == 422
         assert client.get('/api/intelligence/wallet/bad/history').status_code == 422
-        replayed = client.get('/api/stream/next').json()
+        replayed = client.post('/api/stream/next').json()
         overview = client.get('/api/intelligence/overview').json()
         assert overview['observations'] == 1
         assert overview['graph']['nodes'][0]['address'] == replayed['address']

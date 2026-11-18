@@ -1,6 +1,7 @@
 """Bootstrap and run the FastAPI backend and Vite frontend in one terminal."""
 
 import hashlib
+import json
 import os
 import signal
 import shutil
@@ -47,6 +48,9 @@ def ensure_python() -> None:
         run_step([sys.executable, "-m", "venv", str(VENV)], "Creating Python virtual environment")
     if Path(sys.prefix).resolve() != VENV.resolve():
         command = [str(PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]]
+        if os.name != "nt":
+            os.chdir(ROOT)
+            os.execv(str(PYTHON), command)
         try:
             return_code = subprocess.call(command, cwd=ROOT)
         except KeyboardInterrupt:
@@ -95,22 +99,28 @@ def ensure_model() -> None:
         run_step([str(PYTHON), str(ROOT / "backend" / "app" / "ml" / "train_model.py")], "Training the local fraud model")
 
 
-def ensure_port_available(port: int, service: str) -> None:
-    """Fail only when an active listener owns the expected local port."""
+def port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.25)
-        if sock.connect_ex(("127.0.0.1", port)) == 0:
-            fail(
-                f"Port {port} is already in use, so {service} cannot start. "
-                "Stop the existing project process and run 'python3 dev.py' again."
-            )
+        return sock.connect_ex(("127.0.0.1", port)) == 0
 
 
-def url_is_ready(url: str) -> bool:
+def configured_port(name: str, default: int) -> int:
+    value = os.getenv(name, str(default))
+    if not value.isascii() or not value.isdecimal() or not 1 <= int(value) <= 65535:
+        fail(f"{name} must be a port number between 1 and 65535.")
+    return int(value)
+
+
+def url_is_ready(url: str, *, backend: bool = False) -> bool:
     try:
         with urlopen(url, timeout=1) as response:
-            return response.status == 200
-    except (OSError, URLError):
+            body = response.read(65536)
+            if backend:
+                data = json.loads(body)
+                return isinstance(data, dict) and data.get("service") == "dwts" and data.get("model_loaded") is True
+            return b'<meta name="application-name" content="DWTS"' in body
+    except (OSError, URLError, ValueError):
         return False
 
 
@@ -128,22 +138,28 @@ def main() -> int:
         print("\nReady: Python, frontend packages, dataset, and model are available.", flush=True)
         return 0
 
-    existing_backend = url_is_ready("http://127.0.0.1:8000/health")
-    existing_frontend = url_is_ready("http://127.0.0.1:5173")
-    if existing_backend and existing_frontend:
-        print(
-            "Project is already running: Backend: http://127.0.0.1:8000  "
-            "Frontend: http://127.0.0.1:5173",
-            flush=True,
-        )
-        return 0
-    ensure_port_available(8000, "the backend")
-    ensure_port_available(5173, "the frontend")
-
-    backend = [str(PYTHON), "-m", "uvicorn", "app.main:app", "--app-dir", "backend"]
     certificate, key = os.getenv("SSL_CERTFILE"), os.getenv("SSL_KEYFILE")
     if bool(certificate) != bool(key):
         raise SystemExit("Set both SSL_CERTFILE and SSL_KEYFILE, or neither")
+    backend_port = configured_port("DWTS_BACKEND_PORT", 8000)
+    frontend_port = configured_port("DWTS_FRONTEND_PORT", 5173)
+    backend_url = f"{'https' if certificate else 'http'}://{'localhost' if certificate else '127.0.0.1'}:{backend_port}"
+    health_url = f"{backend_url}/health"
+    frontend_ports = [frontend_port] if "DWTS_FRONTEND_PORT" in os.environ else [5173, 5174]
+    if url_is_ready(health_url, backend=True):
+        for port in frontend_ports:
+            frontend_url = f"http://127.0.0.1:{port}"
+            if url_is_ready(frontend_url):
+                print(f"Project is already running. Frontend: {frontend_url}  Backend: {backend_url}", flush=True)
+                return 0
+    if port_in_use(backend_port):
+        fail(f"Backend port {backend_port} is in use. Stop its owner or set DWTS_BACKEND_PORT.")
+    frontend_port = next((port for port in frontend_ports if port != backend_port and not port_in_use(port)), None)
+    if frontend_port is None:
+        fail("No requested frontend port is available. Set DWTS_FRONTEND_PORT to a free port.")
+    frontend_url = f"http://127.0.0.1:{frontend_port}"
+    backend = [str(PYTHON), "-m", "uvicorn", "app.main:app", "--app-dir", "backend",
+               "--host", "127.0.0.1", "--port", str(backend_port)]
     if certificate:
         backend.extend(["--ssl-certfile", certificate, "--ssl-keyfile", key])
     commands = [
@@ -158,24 +174,26 @@ def main() -> int:
             "--host",
             "127.0.0.1",
             "--port",
-            "5173",
+            str(frontend_port),
             "--strictPort",
         ],
     ]
     print("Starting backend and frontend; waiting for both services...", flush=True)
     group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
-    processes = [subprocess.Popen(command, cwd=ROOT, **group) for command in commands]
+    origins = os.getenv("ALLOWED_ORIGINS", "")
+    env = {**os.environ, "VITE_API_URL": backend_url,
+           "ALLOWED_ORIGINS": f"{origins},{frontend_url},http://localhost:{frontend_port}"}
+    processes = []
     try:
-        protocol = "https" if certificate else "http"
-        health_url = f"{protocol}://127.0.0.1:8000/health"
-        frontend_url = "http://127.0.0.1:5173"
+        for command in commands:
+            processes.append(subprocess.Popen(command, cwd=ROOT, env=env, **group))
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             for process, service in zip(processes, ("Backend", "Frontend")):
                 return_code = process.poll()
                 if return_code is not None:
                     raise SystemExit(f"{service} exited during startup (exit code {return_code}).")
-            backend_ready = url_is_ready(health_url)
+            backend_ready = url_is_ready(health_url, backend=True)
             frontend_ready = url_is_ready(frontend_url)
             if backend_ready and frontend_ready:
                 break

@@ -12,7 +12,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test src/api.test.js",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:stack": "playwright test --config playwright.stack.config.js"
   },
   "dependencies": {
     "react": "19.1.0",
@@ -24,7 +25,6 @@
     "@vitejs/plugin-react": "6.0.3",
     "autoprefixer": "10.4.21",
     "postcss": "8.5.28",
-    "tailwindcss": "3.4.17",
-    "vite": "8.1.4"
+    "vite": "8.3.8"
   }
 }

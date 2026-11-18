@@ -35,6 +35,21 @@ for (const width of [320, 390, 768, 1024, 1440]) {
   })
 }
 
+test('confirmed-chain health reports an ingestion failure even with a connected provider', async ({ page }) => {
+  await page.route('**/api/blockchain/status', route => route.fulfill({
+    headers: { 'Access-Control-Allow-Origin': '*' },
+    json: {
+      configured: true, connected: true, latest_block: 120,
+      ingestion: { last_confirmed_block: 100, last_confirmed_timestamp: 1700000000, blocks_behind: 18, error: 'Provider request timed out' },
+    },
+  }))
+  await page.reload()
+  const health = page.getByRole('region', { name: 'Confirmed chain health' })
+  await expect(health.getByText('Ingestion degraded')).toBeVisible()
+  await expect(health.getByText('18', { exact: true })).toBeVisible()
+  await expect(health.getByText('Provider request timed out')).toBeVisible()
+})
+
 test('desktop panels share aligned tops, widths and bottoms', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   await expect(page.getByRole('heading', { name: 'Wallet transaction graph' })).toBeVisible()

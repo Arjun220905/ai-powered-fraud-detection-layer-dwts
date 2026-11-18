@@ -22,12 +22,14 @@ from starlette.concurrency import run_in_threadpool
 
 from app.blockchain.web3_listener import (
     block_transactions,
+    block_hash,
     current_block_number,
     latest_block_transactions,
     provider_configured,
     provider_status,
     transaction_by_hash,
     decode_contract_call,
+    hex_data,
 )
 from app.blockchain.pending_listener import (
     pending_provider_configured, pending_provider_urls, pending_transactions,
@@ -93,6 +95,8 @@ def required_role(path: str, method: str) -> str | None:
         return "admin"
     if path.startswith("/api/labels"):
         return "reviewer"
+    if path == "/api/stream/next":
+        return None  # Public demo writes only simulated evidence, never a wallet score.
     if path in {"/api/screen-transaction", "/api/intelligence/simulate"}:
         return "viewer"
     if path.startswith("/api/") and method not in {"GET", "HEAD", "OPTIONS"}:
@@ -130,9 +134,6 @@ async def lifespan(app: FastAPI):
         app.state.live_confirmations = positive_int("LIVE_CONFIRMATIONS", 2, 0)
         app.state.live_backfill_blocks = positive_int("LIVE_BACKFILL_BLOCKS", 5)
         app.state.live_max_catchup_blocks = positive_int("LIVE_MAX_CATCHUP_BLOCKS", 100)
-        app.state.live_catchup_concurrency = min(
-            positive_int("LIVE_CATCHUP_CONCURRENCY", 4), 16
-        )
         app.state.live_min_wallet_events = positive_int("LIVE_MIN_WALLET_EVENTS", 10)
         app.state.live_display_limit = positive_int("LIVE_DISPLAY_LIMIT", 25)
         app.state.live_retention_blocks = positive_int("LIVE_RETENTION_BLOCKS", 256)
@@ -180,7 +181,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Fraud Detection DWTS API", version="1.0.0", lifespan=lifespan)
-origins = [item.strip() for item in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",") if item.strip()]
+origins = [item.strip() for item in os.getenv(
+    "ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173"
+).split(",") if item.strip()]
 
 
 async def start_live_services(app: FastAPI) -> None:
@@ -328,21 +331,25 @@ def infer_and_update(request: Request, address: str, values: dict, source: str =
     started = time.perf_counter()
     try:
         probability = predict_probability(request.app.state, values)
-        current = request.app.state.store.current_score(address)
-        result = update_score(current, probability)
-        request.app.state.store.save(address, result.score, probability, result.action)
+        if source == "simulated":
+            result = update_score(70.0, probability)
+            score, action = result.score, result.action
+        else:
+            decision = {"address": address, "probability": probability, "applied": True}
+            request.app.state.store.apply_predictions([decision])
+            score, action = decision["score"], decision["action"]
         explanation = explain_prediction(request.app.state, values)
         latency = round((time.perf_counter() - started) * 1000, 3)
         anomaly = anomaly_score(request.app.state, values)
         drift = drift_score(request.app.state, values)
         intelligence.record(request.app.state, source, address, dict(
-            fraud_probability=round(probability, 4), trust_score=result.score,
-            risk_action=result.action, explanation=explanation, latency_ms=latency,
+            fraud_probability=round(probability, 4), trust_score=score,
+            risk_action=action, explanation=explanation, latency_ms=latency,
             anomaly_score=anomaly, drift_score=drift,
             drift_warning=drift is not None and drift >= request.app.state.drift_threshold,
             model_version=request.app.state.model_version))
         return (
-            round(probability, 4), result.score, result.action,
+            round(probability, 4), score, action,
             explanation, latency, anomaly,
         )
     except (ValueError, RuntimeError, OSError) as exc:
@@ -439,30 +446,21 @@ def process_live_block(app: FastAPI, block: dict) -> dict:
         )[:, 1]
         if senders else []
     )
-    current_scores = app.state.store.current_scores(senders)
     score_rows = []
     for address, probability in zip(senders, probabilities):
         values = values_by_address[address]
         probability = float(probability)
-        current = current_scores[address]
         event_count = app.state.live_features.event_count(address)
         mature = event_count >= app.state.live_min_wallet_events
-        result = update_score(current, probability) if mature else None
-        score = result.score if result else current
-        action = result.action if result else "Observe"
         score_rows.append({
             "address": address,
-            "score": score,
             "probability": probability,
-            "action": action,
             "source_key": f"live:{block['hash']}:{address}",
             "block_number": block["number"],
             "applied": int(mature),
         })
         predictions[address] = {
             "fraud_probability": round(probability, 4),
-            "trust_score": score,
-            "risk_action": action,
             "confidence": "experimental" if mature else "cold_start",
             "observed_events": event_count,
             "drift_score": drift_score(app.state, values),
@@ -476,7 +474,9 @@ def process_live_block(app: FastAPI, block: dict) -> dict:
             predictions[address]["drift_score"] is not None
             and predictions[address]["drift_score"] >= app.state.drift_threshold
         )
-    app.state.store.save_many(score_rows)
+    app.state.store.apply_predictions(score_rows)
+    for row in score_rows:
+        predictions[row["address"]].update(trust_score=row["score"], risk_action=row["action"])
     elapsed = (time.perf_counter() - started) * 1000 / max(1, len(senders))
     for address, assessment in predictions.items():
         intelligence.record(app.state, 'live', address, assessment,
@@ -537,13 +537,14 @@ async def ingest_live_blocks(app: FastAPI) -> None:
     if last:
         if not last["processed"]:
             await run_in_threadpool(app.state.store.rollback_from, last["number"])
+            app.state.live_cache = None
             app.state.live_features = await run_in_threadpool(
                 rebuild_live_features, app.state.store
             )
             last = await run_in_threadpool(app.state.store.last_block)
     if last:
-        canonical = await run_in_threadpool(block_transactions, last["number"], 1)
-        if canonical["hash"] != last["hash"]:
+        canonical = await run_in_threadpool(block_hash, last["number"])
+        if canonical != hex_data(last["hash"]):
             await run_in_threadpool(app.state.store.rollback_from, last["number"])
             app.state.live_features = await run_in_threadpool(
                 rebuild_live_features, app.state.store
@@ -561,43 +562,27 @@ async def ingest_live_blocks(app: FastAPI) -> None:
         first, confirmed_head, app.state.live_max_catchup_blocks
     )
 
-    for batch_start in range(
-        first, confirmed_head + 1, app.state.live_catchup_concurrency
-    ):
+    for number in range(first, confirmed_head + 1):
         if not await run_in_threadpool(
             app.state.store.acquire_lease,
             "ethereum_ingestion", app.state.worker_id, app.state.live_lease_seconds,
         ):
             raise RuntimeError("Ethereum ingestion leadership was lost")
-        numbers = range(
-            batch_start,
-            min(batch_start + app.state.live_catchup_concurrency, confirmed_head + 1),
-        )
-        # Full Ethereum blocks can contain hundreds of token transfers. Fetching
-        # several of those expensive RPC payloads at once can temporarily exhaust
-        # a provider's rate limit and stall the whole catch-up at the same block.
-        # Preserve ordered processing and retry an individual transient failure.
-        blocks = []
-        for number in numbers:
-            for attempt in range(3):
-                try:
-                    blocks.append(
-                        await run_in_threadpool(block_transactions, number, None)
-                    )
-                    break
-                except ConnectionError:
-                    if attempt == 2:
-                        raise
-                    await asyncio.sleep(0.5 * (attempt + 1))
-        for block in blocks:
-            previous = await run_in_threadpool(app.state.store.last_block)
-            if previous and block["parent_hash"] != previous["hash"]:
-                await run_in_threadpool(app.state.store.rollback_from, previous["number"])
-                app.state.live_features = await run_in_threadpool(
-                    rebuild_live_features, app.state.store
-                )
-                raise RuntimeError(f"Chain reorganization rolled back block {previous['number']}")
-            await run_in_threadpool(process_live_block, app, block)
+        for attempt in range(3):
+            try:
+                block = await run_in_threadpool(block_transactions, number, None)
+                break
+            except ConnectionError:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.5 * (attempt + 1))
+        previous = await run_in_threadpool(app.state.store.last_block)
+        if previous and hex_data(block["parent_hash"]) != hex_data(previous["hash"]):
+            await run_in_threadpool(app.state.store.rollback_from, previous["number"])
+            app.state.live_cache = None
+            app.state.live_features = await run_in_threadpool(rebuild_live_features, app.state.store)
+            raise RuntimeError(f"Chain reorganization rolled back block {previous['number']}")
+        await run_in_threadpool(process_live_block, app, block)
 
 
 def _hex_int(value) -> int:
@@ -745,6 +730,7 @@ async def live_poller(app: FastAPI) -> None:
 async def health(request: Request):
     return {
         "status": "ok",
+        "service": "dwts",
         "model_loaded": hasattr(request.app.state, "model"),
         "database_backend": request.app.state.store.backend,
     }
@@ -771,7 +757,9 @@ async def ready(request: Request):
 @app.get("/api/blockchain/status")
 async def blockchain_status(request: Request):
     status = await run_in_threadpool(provider_status)
-    last = await run_in_threadpool(request.app.state.store.last_block)
+    last = await run_in_threadpool(request.app.state.store.last_block, True)
+    head = status.get("latest_block")
+    target = max(0, head - request.app.state.live_confirmations) if head is not None else None
     return {
         **status,
         "authentication_required": bool(configured_api_keys()),
@@ -780,6 +768,9 @@ async def blockchain_status(request: Request):
             "leader": request.app.state.live_leader,
             "features_ready": request.app.state.live_features_ready,
             "last_confirmed_block": last["number"] if last else None,
+            "last_confirmed_timestamp": last["timestamp"] if last else None,
+            "confirmation_depth": request.app.state.live_confirmations,
+            "blocks_behind": max(0, target - last["number"]) if target is not None and last else None,
             "error": request.app.state.live_error,
         },
         "pending": {
@@ -803,15 +794,17 @@ async def blockchain_live_stream(
     request: Request,
     limit: int = Query(25, ge=1, le=50),
     after_block: int | None = Query(None, ge=0),
+    after_hash: str | None = Query(None, max_length=66),
 ):
     payload = request.app.state.live_cache
     if not payload:
-        if request.app.state.live_error:
-            raise HTTPException(status_code=503, detail=request.app.state.live_error)
-        return {"mode": "live", "new_block": False, "block_number": None, "transactions": []}
+        return {"mode": "live", "new_block": False, "block_number": None, "transactions": [],
+                "ingestion_error": request.app.state.live_error}
     return {
         **payload,
-        "new_block": after_block is None or payload["block_number"] > after_block,
+        "new_block": after_block != payload["block_number"] or (
+            after_hash is not None and after_hash != payload["block_hash"]
+        ),
         "transactions": payload["transactions"][-limit:],
         "ingestion_error": request.app.state.live_error,
     }
@@ -1048,7 +1041,7 @@ async def predict(payload: PredictionRequest, request: Request):
     )
 
 
-@app.get("/api/stream/next", response_model=PredictionResponse)
+@app.post("/api/stream/next", response_model=PredictionResponse)
 async def stream_next(request: Request, delay_ms: int = Query(0, ge=0, le=5000)):
     try:
         sequence, row = await request.app.state.stream.next(delay_ms)
@@ -1076,9 +1069,10 @@ async def stream_reset(request: Request):
 
 
 @app.get("/api/wallets/{address}")
-async def wallet(address: str, request: Request):
+async def wallet(address: str, request: Request, page: int | None = Query(None, ge=1),
+                 page_size: int = Query(12, ge=1, le=100)):
     try:
-        result = await run_in_threadpool(request.app.state.store.wallet, address.lower())
+        result = await run_in_threadpool(request.app.state.store.wallet, address.lower(), page, page_size)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     if not result:

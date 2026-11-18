@@ -21,7 +21,6 @@ function initialTheme() {
 export default function App() {
   const [theme, setTheme] = useState(initialTheme)
   const [activeSection, setActiveSection] = useState('overview')
-  const [scorePage, setScorePage] = useState(0)
   const [mode, setMode] = useState('simulated')
   const [feed, setFeed] = useState([])
   const [running, setRunning] = useState(false)
@@ -29,6 +28,8 @@ export default function App() {
   const [block, setBlock] = useState(null)
   const [apiKey, setApiKey] = useState(() => sessionStorage.getItem('dwts-api-key') || '')
   const [system, setSystem] = useState(null)
+  const [statusError, setStatusError] = useState('')
+  const [liveError, setLiveError] = useState('')
   const [modelMetrics, setModelMetrics] = useState(null)
   const [operations, setOperations] = useState(null)
   const [audit, setAudit] = useState([])
@@ -47,6 +48,7 @@ export default function App() {
   const searchRequest = useRef(0)
   const [reviewing, setReviewing] = useState(false)
   const blockRef = useRef(null)
+  const blockHashRef = useRef(null)
   const modeRef = useRef('simulated')
   const latest = feed[0]
   const decisionEvidence = screenResult || latest
@@ -54,6 +56,12 @@ export default function App() {
   const pending = mode === 'pending'
   const chart = [...feed].reverse().map((item, index) => ({ event: index + 1, score: item.trust_score, risk: Math.round(item.fraud_probability * 100) }))
   const providerReady = Boolean(system?.connected)
+  const ingestion = system?.ingestion
+  const chainError = liveError || ingestion?.error || system?.error
+  const chainStatus = statusError ? 'Status unavailable' : !system ? 'Checking'
+    : !system.configured ? 'Not configured' : !providerReady ? 'Provider offline'
+    : chainError ? 'Ingestion degraded' : ingestion?.last_confirmed_block == null ? 'Waiting for first block'
+    : ingestion.blocks_behind > 0 ? 'Catching up' : 'Up to date'
   const pendingReady = Boolean(system?.pending?.configured)
   const needsApiKey = Boolean(system?.authentication_required && !apiKey)
   const selectedModel = modelMetrics?.models?.XGBoost
@@ -67,14 +75,20 @@ export default function App() {
   async function tick(activeMode, isCurrent) {
     try {
       const path = activeMode === 'live'
-        ? `/api/blockchain/live-stream${blockRef.current != null ? `?after_block=${blockRef.current}` : ''}`
+        ? `/api/blockchain/live-stream${blockRef.current != null ? `?after_block=${blockRef.current}&after_hash=${encodeURIComponent(blockHashRef.current || '')}` : ''}`
         : activeMode === 'pending' ? '/api/blockchain/pending-stream' : '/api/stream/next'
-      const payload = await request(path)
+      const payload = await request(path, activeMode === 'simulated' ? { method: 'POST' } : {})
       if (!isCurrent() || modeRef.current !== activeMode) return false
       if (activeMode === 'live') {
+        const previousBlock = blockRef.current
         setBlock(payload.block_number)
         blockRef.current = payload.block_number
-        setFeed(items => payload.new_block || items.length === 0 ? [...payload.transactions].reverse().concat(items).slice(0, 24) : items)
+        blockHashRef.current = payload.block_hash
+        setLiveError(payload.ingestion_error || '')
+        setFeed(items => payload.block_number == null ? []
+          : payload.new_block || items.length === 0
+            ? [...payload.transactions].reverse().concat(payload.block_number <= previousBlock ? [] : items).slice(0, 24)
+            : items)
       } else if (activeMode === 'pending') {
         if (payload.error) throw new Error(payload.error)
         setFeed(payload.transactions)
@@ -85,6 +99,7 @@ export default function App() {
       return true
     } catch (exception) {
       if (!isCurrent()) return false
+      if (activeMode === 'live') { setLiveError(exception.message); return true }
       setRunning(false)
       setError(exception.message)
       return false
@@ -105,9 +120,22 @@ export default function App() {
   useEffect(() => setScreenResult(null), [screen])
 
   useEffect(() => {
-    Promise.all([request('/api/blockchain/status'), request('/api/model/metrics')])
-      .then(([status, metrics]) => { setSystem(status); setModelMetrics(metrics) })
-      .catch(exception => setError(exception.message))
+    let active = true
+    let timer
+    async function refreshStatus() {
+      try {
+        const status = await request('/api/blockchain/status')
+        if (active) { setSystem(status); setStatusError('') }
+      } catch (exception) {
+        if (active) setStatusError(exception.message)
+      } finally {
+        if (active) timer = setTimeout(refreshStatus, 10000)
+      }
+    }
+    refreshStatus()
+    request('/api/model/metrics').then(metrics => { if (active) setModelMetrics(metrics) })
+      .catch(exception => { if (active) setError(exception.message) })
+    return () => { active = false; clearTimeout(timer) }
   }, [])
 
   useEffect(() => {
@@ -139,8 +167,9 @@ export default function App() {
   function selectMode(nextMode) {
     if ((nextMode === 'live' && !providerReady) || (nextMode === 'pending' && !pendingReady)) return
     modeRef.current = nextMode
-    setRunning(false); setFeed([]); setBlock(null); setScreenResult(null); setError('')
+    setRunning(false); setFeed([]); setBlock(null); setScreenResult(null); setError(''); setLiveError('')
     blockRef.current = null
+    blockHashRef.current = null
     setMode(nextMode)
   }
 
@@ -206,14 +235,22 @@ export default function App() {
     } catch (exception) { if (id === searchRequest.current) setNotice(exception.message) }
   }
 
-  async function inspectWallet(address) {
+  async function inspectWallet(address, page = 1) {
     const id = ++walletRequest.current
-    try { const result = await request(`/api/wallets/${address}`); if (id === walletRequest.current) { setWalletDetail(result); setScorePage(0) } }
+    try {
+      const result = await request(`/api/wallets/${encodeURIComponent(address)}?page=${page}`)
+      if (id === walletRequest.current) setWalletDetail(result)
+    }
     catch (exception) { if (id === walletRequest.current) setNotice(exception.message) }
   }
 
-  function exportWallet() {
+  async function exportWallet() {
     if (!walletDetail) return
+    try { downloadWallet(await request(`/api/wallets/${encodeURIComponent(walletDetail.address)}`)) }
+    catch (exception) { setNotice(exception.message) }
+  }
+
+  function downloadWallet(walletDetail) {
     const headers = [
       'record_id', 'wallet_address', 'current_wallet_score', 'wallet_updated_at',
       'history_timestamp', 'history_score', 'score_change', 'fraud_probability',
@@ -275,7 +312,7 @@ export default function App() {
         <div className="mode-switcher" role="group" aria-label="Data source">
           {Object.entries(MODES).map(([key, value]) => {
             const disabled = (key === 'live' && !providerReady) || (key === 'pending' && !pendingReady)
-            return <button key={key} type="button" disabled={disabled} aria-pressed={mode === key} title={disabled ? 'Configure the matching provider to enable this source' : value.note} onClick={() => selectMode(key)}><span>{value.label}</span><small>{disabled ? 'Not configured' : value.note}</small></button>
+            return <button key={key} type="button" disabled={disabled} aria-pressed={mode === key} title={disabled && key === 'live' ? chainStatus : value.note} onClick={() => selectMode(key)}><span>{value.label}</span><small>{disabled && key === 'live' ? chainStatus : disabled ? 'Not configured' : value.note}</small></button>
           })}
         </div>
       </section>
@@ -283,6 +320,18 @@ export default function App() {
       <aside className="workspace-guide"><strong>New here? Start with Dataset replay.</strong><p>Press Start to see example wallet assessments, then use an event to fill the transaction form. Trust is scored out of 100: higher is better. Estimated fraud risk is a model prediction, not proof of fraud.</p></aside>
 
       {(live || pending || error) && <div className={`source-notice ${error ? 'notice-error' : ''}`} role={error ? 'alert' : 'status'}><span className="pulse-dot" />{error || (live ? `Confirmed-chain mode. ${block ? `Block ${block}. ` : ''}Cold wallets remain in Observe.` : 'Pending decisions are advisory and never change DWTS before confirmation.')}</div>}
+
+      <section className="panel chain-health" aria-label="Confirmed chain health">
+        <h2>Confirmed chain health</h2>
+        <div className="operations-grid">
+          <SystemMetric label="Ingestion" value={chainStatus} />
+          <SystemMetric label="Provider head" value={system?.latest_block?.toLocaleString() ?? '—'} />
+          <SystemMetric label="Last processed block" value={ingestion?.last_confirmed_block?.toLocaleString() ?? '—'} />
+          <SystemMetric label="Blocks behind confirmed head" value={ingestion?.blocks_behind?.toLocaleString() ?? '—'} />
+        </div>
+        {ingestion?.last_confirmed_timestamp != null && <p>Last processed block time: {formatDate(ingestion.last_confirmed_timestamp * 1000)} · {Math.max(0, Math.floor((Date.now() / 1000 - ingestion.last_confirmed_timestamp) / 60))} min old</p>}
+        {(statusError || chainError) && <p className="source-notice notice-error" role="status">{statusError || chainError} {live && feed.length > 0 && 'Displayed decisions may be stale.'}</p>}
+      </section>
 
       <section className="decision-rail" aria-label="Current risk decision">
         <div className="rail-identity"><p className="eyebrow">Current wallet</p><strong>{latest ? shortAddress(latest.address) : 'No wallet selected'}</strong><span>{latest?.source || MODES[mode].note}</span></div>
@@ -314,7 +363,7 @@ export default function App() {
         <div className="panel screening-panel" id="screening">
           <PanelHeading kicker="PRE-BROADCAST GATE" title="Screen a proposed transaction" meta="Advisory · no state change" />
           <div className="latest-shortcut"><div><strong>Quick-fill from the event ledger</strong><span>{latest ? `${shortAddress(latest.address)} · ${latest.value_eth == null ? 'wallet snapshot' : `${latest.value_eth} ETH`}` : 'Start a stream to capture an event'}</span></div><button type="button" disabled={!latest} onClick={() => loadEvent()}>Use latest event <span aria-hidden="true">↓</span></button></div>
-          {needsApiKey && <p className="source-notice access-notice">Screening is protected. Paste your <code>API_KEY</code> from <code>.env</code> under <a href="#operations">Operations and access</a>, then try again.</p>}
+          {needsApiKey && <p className="source-notice access-notice">Screening is protected. Paste a viewer key (or another authorized key) under <a href="#operations">Operations and access</a>, then try again.</p>}
           <form onSubmit={submitScreen} className="form-stack">
             <Field label="Sender wallet" hint="Required"><input required pattern="0x[a-fA-F0-9]{40}" placeholder="0x…" value={screen.sender} onChange={event => setScreen({...screen, sender: event.target.value})}/></Field>
             <Field label="Recipient wallet" hint="Optional for contract creation"><input pattern="0x[a-fA-F0-9]{40}" placeholder="0x…" value={screen.recipient} onChange={event => setScreen({...screen, recipient: event.target.value})}/></Field>
@@ -334,14 +383,14 @@ export default function App() {
       <section className="panel investigation-panel" id="investigation">
         <PanelHeading kicker="CASEWORK" title="Wallet investigation" meta="Search · history · export" />
         <form onSubmit={searchWallets} className="search-bar"><input aria-label="Wallet address search" placeholder="Search a full or partial wallet address" value={walletQuery} onChange={event => setWalletQuery(event.target.value)}/><button type="submit">Search ledger</button></form>
-        <div className="investigation-grid"><div className="wallet-results">{walletResults.length ? walletResults.map(item => <button type="button" key={item.address} className={walletDetail?.address === item.address ? 'selected' : ''} onClick={() => inspectWallet(item.address)}><span className="address-ident">{item.address.slice(2, 4).toUpperCase()}</span><span><strong>{shortAddress(item.address)}</strong><small>Updated {formatDate(item.updated_at)}</small></span><span className="result-score">{item.score}<RiskBadge action={item.risk_action}/></span></button>) : <EmptyState title="No investigation loaded" body="Search blank to see recent wallets, or enter part of an address." />}</div><div className="wallet-case">{walletDetail ? <><div className="case-heading"><div><p>Wallet address</p><strong>{walletDetail.address}</strong></div><button type="button" onClick={exportWallet}>Export evidence CSV</button></div><div className="case-score"><span>{walletDetail.score}</span><div><strong>Current trust score</strong><small>{walletDetail.history.length} recorded decisions</small></div></div><div className="history-list">{[...walletDetail.history].reverse().slice(scorePage * 12, (scorePage + 1) * 12).map((item, index) => <div key={`${item.created_at}-${index}`}><span className="history-line"/><p><strong>{item.score}</strong><small>{formatDate(item.created_at)}</small></p><RiskBadge action={item.action}/><span>{(item.fraud_probability * 100).toFixed(1)}% fraud</span></div>)}</div><div className="pagination"><button disabled={scorePage === 0} onClick={() => setScorePage(p => p - 1)}>Newer scores</button><span>Page {scorePage + 1} of {Math.max(1, Math.ceil(walletDetail.history.length / 12))}</span><button disabled={(scorePage + 1) * 12 >= walletDetail.history.length} onClick={() => setScorePage(p => p + 1)}>Older scores</button></div></> : <EmptyState title="Select a wallet case" body="Its score history and export controls will appear here." />}</div></div>
+        <div className="investigation-grid"><div className="wallet-results">{walletResults.length ? walletResults.map(item => <button type="button" key={item.address} className={walletDetail?.address === item.address ? 'selected' : ''} onClick={() => inspectWallet(item.address)}><span className="address-ident">{item.address.slice(2, 4).toUpperCase()}</span><span><strong>{shortAddress(item.address)}</strong><small>Updated {formatDate(item.updated_at)}</small></span><span className="result-score">{item.score}<RiskBadge action={item.risk_action}/></span></button>) : <EmptyState title="No investigation loaded" body="Search blank to see recent wallets, or enter part of an address." />}</div><div className="wallet-case">{walletDetail ? <><div className="case-heading"><div><p>Wallet address</p><strong>{walletDetail.address}</strong></div><button type="button" onClick={exportWallet}>Export evidence CSV</button></div><div className="case-score"><span>{walletDetail.score}</span><div><strong>Current trust score</strong><small>{walletDetail.history_total} recorded decisions</small></div></div><div className="history-list">{walletDetail.history.map(item => <div key={item.id}><span className="history-line"/><p><strong>{item.score}</strong><small>{formatDate(item.created_at)}</small></p><RiskBadge action={item.action}/><span>{(item.fraud_probability * 100).toFixed(1)}% fraud</span></div>)}</div><div className="pagination"><button disabled={walletDetail.history_page === 1} onClick={() => inspectWallet(walletDetail.address, walletDetail.history_page - 1)}>Newer scores</button><span>Page {walletDetail.history_page} of {Math.max(1, Math.ceil(walletDetail.history_total / 12))}</span><button disabled={walletDetail.history_page * 12 >= walletDetail.history_total} onClick={() => inspectWallet(walletDetail.address, walletDetail.history_page + 1)}>Older scores</button></div></> : <EmptyState title="Select a wallet case" body="Its score history and export controls will appear here." />}</div></div>
       </section>
 
       <Suspense fallback={<p role="status">Loading analysis tools…</p>}><Intelligence api={API} apiKey={apiKey} authRequired={Boolean(system?.authentication_required)} mode={mode} screen={screen} latest={latest}/></Suspense>
 
       <section className="panel operations-panel" id="operations">
         <div className="operations-head"><PanelHeading kicker="SYSTEM ASSURANCE" title="Operations and access" meta={apiKey ? 'Credential supplied' : 'Public view'} /><button type="button" onClick={loadOperations} disabled={loadingOperations}>{loadingOperations ? 'Refreshing…' : 'Refresh protected evidence'}</button></div>
-        <div className="access-row"><Field label="Role API key" hint="Stored only in this browser tab"><input type="password" placeholder="Viewer, reviewer, or admin key" value={apiKey} onChange={event => rememberKey(event.target.value)}/></Field><p>{system?.authentication_required ? <>For this local setup, paste <code>API_KEY</code> from <code>.env</code>. Viewer keys can screen, reviewer keys can save outcomes, and admin keys can open operational evidence.</> : 'This server has no API-key protection configured. Protected actions are available locally.'}</p></div>
+        <div className="access-row"><Field label="Role API key" hint="Stored only in this browser tab"><input type="password" placeholder="Viewer, reviewer, or admin key" value={apiKey} onChange={event => rememberKey(event.target.value)}/></Field><p>{!system || statusError ? 'Server access status is unavailable or still loading.' : system.authentication_required ? <>Use a viewer key for screening and simulation. Reviewer keys can save outcomes. Admin keys can open operational evidence. If you only set <code>API_KEY</code>, it is the local admin key.</> : 'This server has no API-key protection configured. Protected actions are available locally.'}</p></div>
         <div className="operations-grid">
           <SystemMetric label="Provider" value={system?.connected ? 'Connected' : 'Offline'} tone={system?.connected ? 'good' : 'muted'} />
           <SystemMetric label="Pending feed" value={system?.pending?.configured ? `${system.pending.provider_count} configured` : 'Disabled'} />

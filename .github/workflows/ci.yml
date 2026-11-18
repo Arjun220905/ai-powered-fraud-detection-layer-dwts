@@ -40,3 +40,13 @@ jobs:
       - if: runner.os == 'Linux'
         run: npm run test:e2e
         working-directory: frontend
+      - if: runner.os == 'Linux'
+        run: npm run test:stack
+        working-directory: frontend
+      - if: runner.os == 'Linux'
+        run: npm audit --omit=dev --audit-level=moderate
+        working-directory: frontend
+      - if: runner.os == 'Linux'
+        name: Report full dependency advisories
+        run: npm audit --audit-level=none
+        working-directory: frontend
