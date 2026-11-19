@@ -22,7 +22,8 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - if: runner.os == 'macOS'
         run: brew install libomp
-      - run: python dev.py --check
+      - name: Launch a fresh checkout and exercise the real stack
+        run: python scripts/smoke_launcher.py
       - name: Verify backend in bootstrapped environment
         shell: bash
         run: |

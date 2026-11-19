@@ -126,7 +126,7 @@ Windows PowerShell:
 
 ```powershell
 cd ai-powered-fraud-detection-layer-dwts
-py -3 dev.py --check
+python dev.py --check
 ```
 
 macOS/Linux:
@@ -136,15 +136,16 @@ cd ai-powered-fraud-detection-layer-dwts
 python3 dev.py --check
 ```
 
-The check command creates `.venv`, installs the pinned backend and frontend packages,
-and trains the local model because binary model files are not committed.
+This optional check prepares the environment without starting servers. You can skip
+it and go straight to the launcher below.
 
 ## 8. Start everything with one command
 
-Run `py -3 dev.py` on Windows or `python3 dev.py` on macOS/Linux. The launcher
-automatically uses the project's virtual environment and skips setup work that is
-already current. Running `python3 dev.py` from inside `frontend/` also works and
-forwards to the same project launcher.
+Run `python dev.py` on Windows or `python3 dev.py` on macOS/Linux. On the first run,
+the launcher creates `.venv`, installs packages, and trains the local model.
+Subsequent runs reuse the environment and model. If the default interpreter is
+outside the supported range, the launcher looks for an installed Python 3.10–3.13.
+You can run the same command inside `frontend/`.
 
 Open the **Frontend** URL printed after **Ready**. The dashboard uses port 5173 by
 default and tries 5174 if 5173 is occupied. The backend defaults to port 8000.

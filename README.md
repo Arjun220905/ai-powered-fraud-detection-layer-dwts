@@ -62,7 +62,7 @@ See [docs/architecture.md](docs/architecture.md) for the score formula and thres
    Windows PowerShell:
 
    ```powershell
-   py -3 dev.py
+   python dev.py
    ```
 
    macOS/Linux:
@@ -84,7 +84,9 @@ See [docs/architecture.md](docs/architecture.md) for the score formula and thres
    Press `Ctrl+C` in the original launcher terminal to stop both.
 
    To prepare and validate the environment without starting servers, run
-   `python dev.py --check` (or `py -3 dev.py --check` on Windows).
+   `python dev.py --check` on Windows or `python3 dev.py --check` on macOS/Linux.
+   If the default Python is outside the supported range, the launcher looks for an
+   installed Python 3.10–3.13. The supported Python must be on PATH on macOS/Linux.
 
 The dataset is included. If `data/transaction_dataset.csv` is missing, restore it from
 the repository or follow [data/README.md](data/README.md).
@@ -139,8 +141,9 @@ npm run test:e2e
 ```
 
 On macOS/Linux, replace `.\.venv\Scripts\python.exe` with `.venv/bin/python`.
-GitHub Actions executes the bootstrap, backend tests, frontend unit/build checks on
-Windows, macOS, and Linux. Linux also runs the mocked browser regressions and
+GitHub Actions launches a fresh checkout on Windows, macOS, and Linux, verifies both
+services and a real dataset-replay response, then runs backend tests and frontend
+unit/build checks. Linux also runs the mocked browser regressions and
 `npm --prefix frontend run test:stack`, which starts `python3 dev.py` with a
 temporary SQLite database and exercises the real frontend and API without provider
 credentials. CI gates runtime dependency advisories and reports development advisories.

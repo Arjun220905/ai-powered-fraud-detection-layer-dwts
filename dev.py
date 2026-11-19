@@ -1,5 +1,7 @@
 """Bootstrap and run the FastAPI backend and Vite frontend in one terminal."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import os
@@ -20,6 +22,7 @@ PYTHON = VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 REQUIREMENTS = ROOT / "backend" / "requirements.txt"
 PACKAGE_LOCK = ROOT / "frontend" / "package-lock.json"
 MODEL = ROOT / "backend" / "app" / "ml" / "model.pkl"
+SUPPORTED_PYTHON = ((3, 10), (3, 14))
 
 
 def fail(message: str) -> None:
@@ -41,11 +44,33 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def bootstrap_python() -> list[str]:
+    minimum, maximum = SUPPORTED_PYTHON
+    if minimum <= sys.version_info[:2] < maximum:
+        return [sys.executable]
+
+    # Apple ships an older python3, and the Windows launcher can select a newer one.
+    windows_launcher = shutil.which("py") if os.name == "nt" else None
+    for minor in range(maximum[1] - 1, minimum[1] - 1, -1):
+        version = f"3.{minor}"
+        executable = shutil.which(f"python{version}")
+        command = [windows_launcher, f"-{version}"] if windows_launcher else [executable] if executable else []
+        if command:
+            try:
+                available = subprocess.run(
+                    [*command, "-c", f"import sys; sys.exit(sys.version_info[:2] != (3, {minor}))"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+                ).returncode == 0
+                if available:
+                    return command
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+    fail("Install Python 3.10 through 3.13 and put it on PATH, then rerun the launcher.")
+
+
 def ensure_python() -> None:
     if not PYTHON.is_file():
-        if not (3, 10) <= sys.version_info[:2] < (3, 14):
-            fail("Python 3.10 through 3.13 is required to create .venv.")
-        run_step([sys.executable, "-m", "venv", str(VENV)], "Creating Python virtual environment")
+        run_step([*bootstrap_python(), "-m", "venv", str(VENV)], "Creating Python virtual environment")
     if Path(sys.prefix).resolve() != VENV.resolve():
         command = [str(PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]]
         if os.name != "nt":
@@ -56,7 +81,7 @@ def ensure_python() -> None:
         except KeyboardInterrupt:
             return_code = 0
         raise SystemExit(return_code)
-    if not (3, 10) <= sys.version_info[:2] < (3, 14):
+    if not SUPPORTED_PYTHON[0] <= sys.version_info[:2] < SUPPORTED_PYTHON[1]:
         fail("The existing .venv must use Python 3.10 through 3.13.")
     marker = VENV / ".dwts-requirements.sha256"
     expected = digest(REQUIREMENTS)
