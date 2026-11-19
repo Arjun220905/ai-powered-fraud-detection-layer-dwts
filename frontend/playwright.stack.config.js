@@ -9,6 +9,7 @@ const backendPort = '18000'
 
 export default defineConfig({
   testDir: './smoke',
+  outputDir: '../test-results/stack',
   use: { baseURL: `http://127.0.0.1:${frontendPort}`, browserName: 'chromium' },
   webServer: {
     cwd: root,

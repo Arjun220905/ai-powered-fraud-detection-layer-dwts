@@ -211,6 +211,23 @@ Choose **Retained confirmed chain** to see real transfer arrows. Enter a full or
 address under **Find wallet**, press **Search graph** (or Enter), then select a node to
 open its investigation. Risk filtering, pagination, zoom and pan remain available.
 
+### Demonstrate the Case desk
+
+1. Start **Dataset replay** and pause when an assessment appears.
+2. Click **Save current assessment**. In **Case desk**, give the wallet a label,
+   choose **Research sample**, add a review note, and save.
+3. Open the wallet's history and show the saved assessment's source, model
+   version, and explanation. Save another assessment of the same wallet to
+   compare them. A numeric delta requires a matching source and model version.
+4. Click **Export case JSON** to save the notes and snapshots as evidence for
+   your project report. This demo works without a live Ethereum provider.
+
+For the live demo, open **Trace wallet connections** in Intelligence, select
+retained confirmed-chain data, then enter two addresses from the retained
+graph or select **Try a retained pair**. The search follows sender-to-recipient
+edges for up to four hops. Use
+**Swap wallets** to demonstrate why direction matters.
+
 ### What-if risk comparison
 
 Enter a sender, an original ETH amount, and a different test amount. You can optionally
@@ -295,9 +312,14 @@ corresponding role. `API_KEY` is the fallback admin credential.
 
 ### Live mode is catching up
 
-The database remembers the last confirmed block. After several days offline, it catches
-up in bounded cycles and saves each block before fetching the next. Leave the
-backend running and use **Confirmed chain health** to see whether lag is decreasing.
+Alchemy reports the current Mainnet head. The last processed block shows what your
+local worker has saved. Short gaps are processed in order. With the default settings,
+a gap greater than 256 blocks starts a new segment near the confirmed head so the
+live view recovers quickly. Open **Block details** to see the skipped range. Set
+`LIVE_RESUME_MAX_GAP=0` in `.env` before launching if you need contiguous coverage.
+
+Choose **Color theme** in the top bar to switch between Indigo light and Indigo dark.
+Your browser remembers the choice.
 
 ## 14. Run the checks
 

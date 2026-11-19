@@ -46,8 +46,79 @@ test('confirmed-chain health reports an ingestion failure even with a connected 
   await page.reload()
   const health = page.getByRole('region', { name: 'Confirmed chain health' })
   await expect(health.getByText('Ingestion degraded')).toBeVisible()
-  await expect(health.getByText('18', { exact: true })).toBeVisible()
+  await expect(health.getByText('18 blocks behind', { exact: true })).toBeVisible()
+  await health.getByText('Block details', { exact: true }).click()
+  await expect(health.getByText('120', { exact: true })).toBeVisible()
   await expect(health.getByText('Provider request timed out')).toBeVisible()
+})
+
+test('case notes, saved assessments, and export survive a reload', async ({ page }) => {
+  const desk = page.getByRole('region', { name: 'Case desk', exact: true })
+  await page.getByRole('link', { name: 'Case desk', exact: true }).click()
+  await desk.getByLabel('Ethereum address').fill(address(1))
+  await desk.getByRole('button', { name: 'Follow wallet', exact: true }).click()
+  await desk.getByLabel('Wallet label').fill('Course demonstration')
+  await desk.getByLabel('Review notes').fill('Historical observation for review.')
+  await desk.getByLabel('Review status').selectOption('review')
+  await desk.getByRole('button', { name: 'Save case notes' }).click()
+  await page.getByRole('button', { name: 'Start Dataset replay' }).click()
+  await page.getByRole('button', { name: 'Save current assessment' }).click()
+  await expect(desk.getByRole('region', { name: 'Saved assessments' }).getByText('Dataset replay')).toBeVisible()
+  await page.getByRole('button', { name: 'Pause Dataset replay' }).click()
+  await page.reload()
+  await desk.getByRole('button', { name: /Course demonstration.*In review/ }).click()
+  await expect(desk.getByLabel('Review notes')).toHaveValue('Historical observation for review.')
+  const [download] = await Promise.all([page.waitForEvent('download'), desk.getByRole('button', { name: 'Export case JSON' }).click()])
+  expect(download.suggestedFilename()).toBe(`dwts-case-${address(1)}.json`)
+  await desk.getByRole('button', { name: 'Open wallet history' }).click()
+  await expect(page.getByLabel('Full wallet address for investigation')).toHaveValue(address(1))
+})
+
+test('trace finds an observed two-hop path and respects transfer filters and direction', async ({ page }) => {
+  await page.route('**/api/intelligence/overview?source=live', route => route.fulfill({
+    headers: { 'Access-Control-Allow-Origin': '*' },
+    json: { ...overview, graph: { ...graph, edges: [
+      { sender: address(1), recipient: address(2), transfer_count: 2, native_transfers: 2, token_transfers: 0, unknown_receipts: 1 },
+      { sender: address(2), recipient: address(3), transfer_count: 1, native_transfers: 1, token_transfers: 0, unknown_receipts: 0 },
+      { sender: address(1), recipient: address(3), transfer_count: 0, native_transfers: 0, token_transfers: 0 },
+    ] } },
+  }))
+  const trace = page.getByRole('region', { name: 'Trace wallet connections' })
+  await trace.getByRole('button', { name: 'Use retained confirmed chain' }).click()
+  await trace.getByLabel('Starting wallet').fill(address(1))
+  await trace.getByLabel('Destination wallet').fill(address(3))
+  await trace.getByRole('button', { name: 'Find transfer path' }).click()
+  await expect(trace.getByText('Shortest observed path: 2 hops.')).toBeVisible()
+  await expect(trace.getByText(/1 with unknown receipt status/)).toBeVisible()
+  await trace.getByLabel('Transfer type').selectOption('tokens')
+  await expect(trace.getByText('No directed path within four hops in this sample.')).toBeVisible()
+  await trace.getByLabel('Transfer type').selectOption('all')
+  await trace.getByRole('button', { name: 'Swap wallets' }).click()
+  await trace.getByRole('button', { name: 'Find transfer path' }).click()
+  await expect(trace.getByText('No directed path within four hops in this sample.')).toBeVisible()
+})
+
+test('two saved screenings compare risk and shared contributions', async ({ page }) => {
+  await page.route('**/api/screen-transaction', route => {
+    const value = route.request().postDataJSON()?.value_eth ?? 0
+    return route.fulfill({ headers: { 'Access-Control-Allow-Origin': '*' }, json: {
+      ...decision, id: `screen-${value}`, model_version: 'course-model',
+      fraud_probability: value === 1 ? .2 : .5,
+      explanation: [{ feature: 'Transfer frequency', impact: value === 1 ? .4 : .8 }],
+    } })
+  })
+  const screening = page.locator('#screening')
+  await screening.getByLabel(/Sender wallet/).fill(address(1))
+  for (const amount of ['1', '2']) {
+    await screening.getByLabel(/Value/).fill(amount)
+    await screening.getByRole('button', { name: 'Run screening' }).click()
+    await screening.getByRole('button', { name: 'Save screening assessment' }).click()
+  }
+  const desk = page.getByRole('region', { name: 'Case desk', exact: true })
+  await expect(desk.getByText(/Risk change: \+30.00 percentage points/)).toBeVisible()
+  await expect(desk.getByText('+0.400 log-odds')).toBeVisible()
+  await desk.getByLabel('Comparison assessment').selectOption('screen-1')
+  await expect(desk.getByText('Choose two different assessments.')).toBeVisible()
 })
 
 test('desktop panels share aligned tops, widths and bottoms', async ({ page }) => {
@@ -149,14 +220,21 @@ test('navigation highlights the selected workspace section', async ({ page }) =>
   await expect(intelligence).toHaveAttribute('aria-current', 'location')
 })
 
-test('theme toggle switches modes and remembers the choice', async ({ page }) => {
-  const darkToggle = page.getByRole('button', { name: 'Switch to dark mode', exact: true })
-  await expect(darkToggle).toBeVisible()
-  await darkToggle.click()
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+test('color theme offers only the two Indigo palettes and remembers the choice', async ({ page }) => {
+  const picker = page.getByRole('combobox', { name: 'Color theme' })
+  await expect(picker.getByRole('option')).toHaveText(['Indigo light', 'Indigo dark'])
+  for (const theme of ['light', 'dark']) {
+    await picker.selectOption(theme)
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+  }
   expect(await page.evaluate(() => localStorage.getItem('dwts-theme'))).toBe('dark')
   await page.reload()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
-  await page.getByRole('button', { name: 'Switch to light mode', exact: true }).click()
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  for (const retired of ['ocean', 'sand']) {
+    await page.emulateMedia({ colorScheme: 'light' })
+    await page.evaluate(theme => localStorage.setItem('dwts-theme', theme), retired)
+    await page.reload()
+    await expect(picker).toHaveValue('light')
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  }
 })

@@ -30,6 +30,10 @@ def test_evidence_graph_alerts_and_rollback(tmp_path):
         assert result['trends'][0]['eth_volume'] == 2
         assert result['trends'][0]['transactions'] == 2
         assert result['trends'][0]['fraud_rate'] == 2 / 3
+        transfers = {(edge['sender'], edge['recipient']): edge for edge in result['graph']['edges']}
+        assert transfers[A, B]['native_transfers'] == 1
+        assert transfers[A, B]['token_transfers'] == 1
+        assert transfers[B, C]['transfer_count'] == 0
         assert result['clusters'] == [dict(members=[A, B], size=2)]
         assert result['monitoring']['p95_ms'] == 2
         simulated_graph = intelligence.overview(store, 'simulated')['graph']

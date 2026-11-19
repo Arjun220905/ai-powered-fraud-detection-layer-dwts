@@ -17,4 +17,8 @@ test('the launcher serves a real replay decision and isolated trust history', as
   await expect(page.getByRole('button', { name: 'Pause Dataset replay' })).toBeVisible()
   await expect(page.getByText(/\d+ events in view/)).toBeVisible()
   await page.getByRole('button', { name: 'Pause Dataset replay' }).click()
+  await page.getByRole('button', { name: 'Save current assessment' }).click()
+  const desk = page.getByRole('region', { name: 'Case desk', exact: true })
+  await expect(desk.getByRole('region', { name: 'Saved assessments' }).getByText('Dataset replay')).toBeVisible()
+  await expect(desk.getByText(payload.address, { exact: true })).toBeVisible()
 })

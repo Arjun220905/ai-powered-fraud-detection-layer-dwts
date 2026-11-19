@@ -133,6 +133,7 @@ async def lifespan(app: FastAPI):
         app.state.live_lease_seconds = max(60, app.state.live_poll_seconds * 5)
         app.state.live_confirmations = positive_int("LIVE_CONFIRMATIONS", 2, 0)
         app.state.live_backfill_blocks = positive_int("LIVE_BACKFILL_BLOCKS", 5)
+        app.state.live_resume_max_gap = positive_int("LIVE_RESUME_MAX_GAP", 256, 0)
         app.state.live_max_catchup_blocks = positive_int("LIVE_MAX_CATCHUP_BLOCKS", 100)
         app.state.live_min_wallet_events = positive_int("LIVE_MIN_WALLET_EVENTS", 10)
         app.state.live_display_limit = positive_int("LIVE_DISPLAY_LIMIT", 25)
@@ -534,15 +535,22 @@ async def ingest_live_blocks(app: FastAPI) -> None:
     confirmed_head = max(0, head - app.state.live_confirmations)
     last = await run_in_threadpool(app.state.store.last_block)
 
-    if last:
-        if not last["processed"]:
-            await run_in_threadpool(app.state.store.rollback_from, last["number"])
-            app.state.live_cache = None
-            app.state.live_features = await run_in_threadpool(
-                rebuild_live_features, app.state.store
-            )
-            last = await run_in_threadpool(app.state.store.last_block)
-    if last:
+    if last and not last["processed"]:
+        await run_in_threadpool(app.state.store.rollback_from, last["number"])
+        app.state.live_cache = None
+        app.state.live_features = await run_in_threadpool(rebuild_live_features, app.state.store)
+        last = await run_in_threadpool(app.state.store.last_block)
+
+    recent_start = max(0, confirmed_head - app.state.live_backfill_blocks + 1)
+    gap = None
+    if (last and app.state.live_resume_max_gap
+            and confirmed_head - last["number"] > app.state.live_resume_max_gap
+            and recent_start > last["number"] + 1):
+        first = recent_start
+        gap = {"from_block": last["number"] + 1, "to_block": first - 1}
+        # A deliberate gap starts a new segment. The next block must link normally.
+        await run_in_threadpool(app.state.store.save_metadata, "live_skipped_range", gap)
+    elif last:
         canonical = await run_in_threadpool(block_hash, last["number"])
         if canonical != hex_data(last["hash"]):
             await run_in_threadpool(app.state.store.rollback_from, last["number"])
@@ -553,7 +561,7 @@ async def ingest_live_blocks(app: FastAPI) -> None:
             raise RuntimeError(f"Chain reorganization rolled back block {last['number']}")
         first = last["number"] + 1
     else:
-        first = max(0, confirmed_head - app.state.live_backfill_blocks + 1)
+        first = recent_start
 
     missing = confirmed_head - first + 1
     if missing <= 0:
@@ -577,7 +585,7 @@ async def ingest_live_blocks(app: FastAPI) -> None:
                     raise
                 await asyncio.sleep(0.5 * (attempt + 1))
         previous = await run_in_threadpool(app.state.store.last_block)
-        if previous and hex_data(block["parent_hash"]) != hex_data(previous["hash"]):
+        if previous and not (gap and number == first) and hex_data(block["parent_hash"]) != hex_data(previous["hash"]):
             await run_in_threadpool(app.state.store.rollback_from, previous["number"])
             app.state.live_cache = None
             app.state.live_features = await run_in_threadpool(rebuild_live_features, app.state.store)
@@ -758,6 +766,7 @@ async def ready(request: Request):
 async def blockchain_status(request: Request):
     status = await run_in_threadpool(provider_status)
     last = await run_in_threadpool(request.app.state.store.last_block, True)
+    skipped = await run_in_threadpool(request.app.state.store.metadata, "live_skipped_range")
     head = status.get("latest_block")
     target = max(0, head - request.app.state.live_confirmations) if head is not None else None
     return {
@@ -771,6 +780,7 @@ async def blockchain_status(request: Request):
             "last_confirmed_timestamp": last["timestamp"] if last else None,
             "confirmation_depth": request.app.state.live_confirmations,
             "blocks_behind": max(0, target - last["number"]) if target is not None and last else None,
+            "latest_skipped_range": skipped if skipped and last and last["number"] > skipped["to_block"] else None,
             "error": request.app.state.live_error,
         },
         "pending": {

@@ -190,8 +190,13 @@ persists block events and wallet scores in SQLite. It resumes from the saved cur
 after restart and rolls back orphaned data, including affected pending statuses.
 Only Mainnet providers (chain ID 1) are accepted. Catch-up fetches, retries, and
 saves one block at a time in canonical order. `LIVE_MAX_CATCHUP_BLOCKS` bounds each
-cycle. **Confirmed chain health** refreshes every 10 seconds and shows provider head,
-last processed block, block age, lag behind the confirmation-adjusted head, and errors.
+cycle. When a saved cursor is more than `LIVE_RESUME_MAX_GAP` (default 256) blocks behind
+the confirmed head, live monitoring starts a new segment using the latest
+`LIVE_BACKFILL_BLOCKS` confirmed blocks. This creates a gap in coverage. **Block details**
+shows the latest skipped range, alongside the provider head, processed block, timestamp
+and confirmation depth. Set `LIVE_RESUME_MAX_GAP=0` before restarting if future
+catch-up must be contiguous. Changing the setting does not backfill an existing gap.
+Existing scores are retained and raw chain history follows the configured retention policy.
 
 Live feature recovery runs in the background, so a large chain history cannot block the
 independent dataset replay or FastAPI startup. The zero-setup SQLite configuration keeps
@@ -217,6 +222,35 @@ reported as `wallet_behavior_preview`: the available dataset cannot support an h
 transaction-trained classifier.
 
 ## Fraud intelligence workspace
+
+### Investigation workflow
+
+1. Start Dataset replay or a configured chain source, or screen a proposed transfer.
+2. Save an assessment to **Case desk**. You can also follow a wallet by address and
+   use **Open wallet history** to inspect its retained evidence.
+3. Add a private label, review category, status, and notes. Filter the watchlist
+   by address, label, or status, and filter the alert center to followed wallets.
+4. Compare saved assessments. Risk deltas require the same evidence source and
+   model version. Shared feature-contribution changes are shown in log-odds.
+5. Export a case as JSON with its notes and evidence snapshots for a project report.
+
+Cases are stored in the current browser and dashboard origin. They do not sync
+between devices or change operational wallet scores. Each case holds up to 20
+assessments and the watchlist holds up to 50 cases. The export includes your notes,
+so review it before sharing.
+
+**Trace wallet connections** searches directed paths up to four hops in the latest
+2,000 retained confirmed-chain events. Filter to ETH or token transfers, reverse the
+query, or open a wallet on the path. Known failed and zero-value transfers are
+excluded. Unknown native receipt status is labelled. A path describes observed
+relationships and does not establish transaction order, ownership, or fund lineage.
+
+The watchlist and private labels draw on [Etherscan](https://info.etherscan.com/address-tag-note/),
+directed path exploration on the [Arkham Tracer](https://codex.arkm.com/the-intelligence-platform/tracer),
+and structured review and evidence categories on [Chainabuse](https://chainabuse.com/faq).
+DWTS connects these workflows to its own source-labelled model snapshots and contributor comparison.
+
+### Dashboard views
 
 The dashboard includes trend analytics, explainable model evidence, high-risk wallet
 clusters, alert review, wallet behavior profiles, paged investigation replay, model

@@ -19,3 +19,10 @@ export function formatApiDate(value) {
   const date = new Date(normalized)
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString()
 }
+
+export function blockAge(timestamp, now = Date.now()) {
+  const seconds = Math.max(0, Math.floor(now / 1000 - timestamp))
+  if (seconds < 60) return 'Less than a minute ago'
+  const [unit, size] = seconds >= 86400 ? ['day', 86400] : seconds >= 3600 ? ['hour', 3600] : ['minute', 60]
+  return new Intl.RelativeTimeFormat(undefined, { numeric: 'always' }).format(-Math.floor(seconds / size), unit)
+}

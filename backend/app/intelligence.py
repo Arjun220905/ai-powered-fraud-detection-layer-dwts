@@ -92,11 +92,17 @@ def overview(store, source):
     latest = {}
     for row in rows:
         latest.setdefault(row['address'], row)
-    edges = defaultdict(lambda: dict(count=0, eth_volume=0))
+    edges = defaultdict(lambda: dict(count=0, eth_volume=0, transfer_count=0,
+                                     native_transfers=0, token_transfers=0, unknown_receipts=0))
     for item in events:
         if item['recipient']:
             edge = edges[(item['sender'], item['recipient'])]
             edge['count'] += 1
+            if item['status'] != 0 and float(item['value']) > 0:
+                edge['transfer_count'] += 1
+                edge['native_transfers' if item['kind'] == 'native' else 'token_transfers'] += 1
+                if item['kind'] == 'native' and item['status'] is None:
+                    edge['unknown_receipts'] += 1
             if item['kind'] == 'native' and item['status'] != 0:
                 edge['eth_volume'] += float(item['value'])
     # ponytail: bounded observed graph; connected components flag candidates, not proven fraud rings.

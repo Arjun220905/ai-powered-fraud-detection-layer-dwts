@@ -2,16 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { readResponse } from './api'
 import WalletGraph from './WalletGraph'
+import TransferTrace from './TransferTrace'
+import { evidenceSources, walletAddress } from './investigation'
 
 const short = value => value ? `${value.slice(0, 8)}…${value.slice(-5)}` : '—'
 const percent = value => value == null ? 'Unavailable' : `${(value * 100).toFixed(1)}%`
 const signedPoints = value => { const points = Number(value || 0) * 100; return `${points > 0 ? '+' : ''}${points.toFixed(1)} points` }
 const date = stamp => new Date(stamp * 1000).toLocaleString()
 
-export default function Intelligence({ api, apiKey, authRequired, mode, screen, latest }) {
+export default function Intelligence({ api, apiKey, authRequired, mode, screen, latest, inspectionTarget, onSaveAssessment, onFollow, cases }) {
   const [overview, setOverview] = useState(null)
   const [source, setSource] = useState(mode)
   const [alerts, setAlerts] = useState([])
+  const [alertFilter, setAlertFilter] = useState('all')
   const [error, setError] = useState('')
   const [refreshError, setRefreshError] = useState('')
   const [inspecting, setInspecting] = useState(false)
@@ -28,6 +31,11 @@ export default function Intelligence({ api, apiKey, authRequired, mode, screen, 
   const investigationRequest = useRef(0)
   const simulationRequest = useRef(0)
   useEffect(() => setSource(mode), [mode])
+  useEffect(() => {
+    if (!inspectionTarget) return
+    inspect(inspectionTarget.address)
+    document.getElementById('wallet-evidence')?.scrollIntoView()
+  }, [inspectionTarget])
 
   async function request(path, options = {}) {
     const response = await fetch(`${api}/api/intelligence${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(apiKey ? { 'X-API-Key': apiKey } : {}) } })
@@ -57,7 +65,7 @@ export default function Intelligence({ api, apiKey, authRequired, mode, screen, 
   }, [playing, casework, step])
 
   async function inspect(wallet, observation = null, page = 1, until = null) {
-    setSelected(observation); setPlaying(false); setInspecting(true); setError(''); setCasework(null)
+    setAddress(wallet); setSelected(observation); setPlaying(false); setInspecting(true); setError(''); setCasework(null)
     const currentRequest = ++investigationRequest.current
     try {
       const path = `/wallet/${encodeURIComponent(wallet)}`
@@ -102,6 +110,10 @@ export default function Intelligence({ api, apiKey, authRequired, mode, screen, 
   const evidence = selected || (casework || inspecting ? (current?.kind === 'decision' ? current.data : null) : latest)
   const graph = overview?.graph
   const monitoring = overview?.monitoring
+  const watched = new Set(cases.map(item => item.address))
+  const visibleAlerts = alerts.filter(alert => alertFilter === 'all' ||
+    (alertFilter === 'open' && !alert.acknowledged) ||
+    (alertFilter === 'watched' && watched.has(walletAddress(alert.event.address))))
 
   return <section className="intelligence" id="intelligence" aria-label="Fraud intelligence">
     <div className="panel-heading"><div><h2>Fraud intelligence</h2><p>Patterns, connections, and the evidence behind each decision.</p></div><span>Refreshes every 10 seconds</span></div>
@@ -122,17 +134,32 @@ export default function Intelligence({ api, apiKey, authRequired, mode, screen, 
         <WalletGraph key={source} graph={graph} onInspect={inspect}/>
       </article>
       <article className="panel"><Heading title="Wallets needing attention" /><div className="intel-scroll">{overview?.anomalies.length ? overview.anomalies.map(item => <button className={`intel-event ${selected?.id === item.id ? 'is-selected' : ''}`} aria-pressed={selected?.id === item.id} key={item.id} onClick={() => inspect(item.address, item)}><strong>{short(item.address)}</strong><span>{percent(item.fraud_probability)} risk · {item.source}</span><small>{date(item.timestamp)}</small></button>) : <Empty text="No observations cross the 80% risk or anomaly threshold." />}</div></article>
-      <article className="panel"><Heading title="What influenced the risk?" /><p className="intel-note">Selected observation: {short(evidence?.address)}. XGBoost contributions are in raw model log-odds, not percentage points or causal explanations.</p><div className="reason-list">{evidence?.explanation?.length ? evidence.explanation.map(reason => <div key={reason.feature}><span className={reason.impact > 0 ? 'impact-up' : 'impact-down'}>{reason.impact > 0 ? '+' : ''}{reason.impact}</span><p><strong>{reason.feature}</strong><small>{reason.direction}</small></p></div>) : <Empty text="Select an anomaly or replay a recorded decision to see its saved explanation." />}</div></article>
+      <article className="panel"><Heading title="What influenced the risk?" /><p className="intel-note">Selected observation: {short(evidence?.address)}. XGBoost contributions are in raw model log-odds, not percentage points or causal explanations.</p>{walletAddress(evidence?.address) && <div className="intel-buttons evidence-actions"><button type="button" onClick={() => onSaveAssessment(evidence, evidence === latest ? mode : evidence.source)}>Save this assessment</button></div>}<div className="reason-list">{evidence?.explanation?.length ? evidence.explanation.map(reason => <div key={reason.feature}><span className={reason.impact > 0 ? 'impact-up' : 'impact-down'}>{reason.impact > 0 ? '+' : ''}{reason.impact}</span><p><strong>{reason.feature}</strong><small>{reason.direction}</small></p></div>) : <Empty text="Select an anomaly or replay a recorded decision to see its saved explanation." />}</div></article>
       <article className="panel"><Heading title="Connected high-risk wallets" /><p className="intel-note">Connected components of wallets with ≥80% latest observed risk. These relationships are review leads, not proof of collusion.</p><div className="intel-scroll">{overview?.clusters.length ? overview.clusters.map(cluster => <div className="intel-cluster" key={cluster.members[0]}><strong>{cluster.size} connected suspicious wallets</strong>{cluster.members.map(wallet => <button key={wallet} onClick={() => inspect(wallet)}>{short(wallet)}</button>)}</div>) : <Empty text="No connected suspicious wallet groups in the observed graph." />}</div></article>
       <article className="panel"><Heading title="Model health" /><div className="operations-grid"><Stat label="Mean decision latency" value={monitoring?.mean_ms == null ? '—' : `${monitoring.mean_ms.toFixed(2)} ms`}/><Stat label="P95 latency" value={monitoring?.p95_ms == null ? '—' : `${monitoring.p95_ms.toFixed(2)} ms`}/><Stat label="Latency samples" value={monitoring?.latency_samples ?? 0}/><Stat label="Drift warnings" value={monitoring?.drift_warnings ?? 0}/></div><p className="intel-note">Prediction distribution · live latency is batch processing time per sender.</p><div className="intel-distribution">{monitoring?.distribution.map(bin => <label key={bin.range}><span>{bin.range}</span><meter min="0" max={Math.max(1, overview.observations)} value={bin.count}/><strong>{bin.count}</strong></label>)}</div></article>
     </div>
-    <article className="panel intel-case"><Heading title="Wallet activity and history" /><form className="search-bar" onSubmit={event => { event.preventDefault(); setSelected(null); inspect(address) }}><input required aria-label="Full wallet address for investigation" pattern="0x[a-fA-F0-9]{40}" placeholder="0x… full wallet address" value={address} onChange={event => setAddress(event.target.value)}/><button disabled={inspecting}>{inspecting ? 'Loading history…' : 'Open investigation'}</button></form>
+    <TransferTrace graph={graph} source={source} onUseChain={() => setSource('live')} onInspect={wallet => {
+      inspect(wallet); document.getElementById('wallet-evidence')?.scrollIntoView()
+    }} />
+    <article className="panel intel-case" id="wallet-evidence"><Heading title="Wallet activity and history" /><form className="search-bar" onSubmit={event => { event.preventDefault(); setSelected(null); inspect(address) }}><input required aria-label="Full wallet address for investigation" pattern="0x[a-fA-F0-9]{40}" placeholder="0x… full wallet address" value={address} onChange={event => setAddress(event.target.value)}/><button disabled={inspecting}>{inspecting ? 'Loading history…' : 'Open investigation'}</button></form>
+      {casework && <div className="intel-buttons evidence-actions"><button type="button" onClick={() => onFollow(casework.address)}>{watched.has(casework.address) ? 'Open wallet case' : 'Follow investigated wallet'}</button></div>}
       {casework && <><p className="intel-note">{casework.address} · {casework.scope} {casework.truncated && 'Sample limit reached.'}</p><div className="operations-grid"><Stat label="Observed events" value={casework.profile.events}/><Stat label="Counterparties" value={casework.profile.counterparties.length}/><Stat label="Events per hour" value={casework.profile.transactions_per_hour?.toFixed(2) ?? '—'}/><Stat label="Average gas used" value={casework.profile.average_gas_used?.toFixed(0) ?? 'Unavailable'}/><Stat label="Failure rate" value={percent(casework.profile.failure_rate)}/><Stat label="Receipt samples" value={casework.profile.receipt_samples}/></div>
       {historyPage && <div className="pagination"><button disabled={inspecting || historyPage.page <= 1} onClick={() => inspect(casework.address, null, historyPage.page - 1, historyPage.until)}>Newer history</button><span>{historyPage.total} records · page {historyPage.page} of {Math.max(1, Math.ceil(historyPage.total / historyPage.page_size))}</span><button disabled={inspecting || !historyPage.has_more} onClick={() => inspect(casework.address, null, historyPage.page + 1, historyPage.until)}>Older history</button></div>}
       {casework.timeline.length ? <div className="intel-replay"><div className="intel-buttons"><button disabled={step === 0} onClick={() => { setPlaying(false); setSelected(null); setStep(value => value - 1) }}>Previous</button><button disabled={step >= casework.timeline.length - 1 && !playing} onClick={() => { setSelected(null); setPlaying(value => !value) }}>{playing ? 'Pause replay' : 'Play replay'}</button><button disabled={step >= casework.timeline.length - 1} onClick={() => { setPlaying(false); setSelected(null); setStep(value => value + 1) }}>Next</button><span>{step + 1} / {casework.timeline.length}</span></div><input aria-label="Replay position" type="range" min="0" max={casework.timeline.length - 1} value={step} onChange={event => { setPlaying(false); setSelected(null); setStep(Number(event.target.value)) }}/><strong>{current.kind} · {date(current.timestamp)}</strong><ReplayEvent item={current}/></div> : <Empty text="No retained events or recorded decisions for this wallet." />}</>}
     </article>
     <div className="intel-grid">
-      <article className="panel"><Heading title="Alert center" /><p className="intel-note">Latest 100 high-risk observations across sources. Reviewer access can acknowledge. Configure webhook or SMTP delivery on the server.</p><div className="intel-scroll">{alerts.length ? alerts.map(alert => <div className="intel-alert" key={alert.id}><button onClick={() => { setSelected(alert.event); inspect(alert.event.address) }}>{short(alert.event.address)} · {percent(alert.event.fraud_probability)}</button><small>{alert.event.source} · {date(alert.timestamp)} · {Object.entries(alert.delivery).map(([key, value]) => `${key}: ${value}`).join(', ') || 'Dashboard only / delivery pending'}</small><button disabled={alert.acknowledged} onClick={() => acknowledge(alert.id)}>{alert.acknowledged ? 'Acknowledged' : 'Acknowledge'}</button></div>) : <Empty text="No high-risk alerts recorded." />}</div></article>
+      <article className="panel">
+        <Heading title="Alert center" />
+        <p className="intel-note">Latest 100 risk or anomaly alerts across sources. Reviewer access can acknowledge alerts. Simulated alerts stay in the dashboard.</p>
+        <label className="intel-control">Alert filter<select value={alertFilter} onChange={event => setAlertFilter(event.target.value)}>
+          <option value="all">All alerts</option><option value="open">Needs review</option><option value="watched">Followed wallets</option>
+        </select></label>
+        <div className="intel-scroll">{visibleAlerts.length ? visibleAlerts.map(alert => <div className="intel-alert" key={alert.id}>
+          <button type="button" onClick={() => inspect(alert.event.address, alert.event)}>{short(alert.event.address)} · {percent(alert.event.fraud_probability)}</button>
+          <small>{evidenceSources[alert.event.source] || alert.event.source} · {date(alert.timestamp)} · {Object.entries(alert.delivery).map(([key, value]) => `${key}: ${value}`).join(', ') || (alert.event.source === 'simulated' ? 'Dashboard only' : 'No delivery recorded')}{alert.event.anomaly_score >= .8 && ` · Anomaly ${percent(alert.event.anomaly_score)}`}</small>
+          <button type="button" disabled={alert.acknowledged} onClick={() => acknowledge(alert.id)}>{alert.acknowledged ? 'Acknowledged' : 'Acknowledge'}</button>
+        </div>) : <Empty text={alertFilter === 'all' ? 'No risk or anomaly alerts recorded.' : 'No alerts match this filter in the latest 100.'} />}</div>
+      </article>
       <article className="panel simulator-panel"><Heading title="What-if risk simulator" /><p className="intel-note">Preview how a different amount or recipient could affect this wallet. It never sends a transaction or changes the trust score.</p><form className="simulator-form" onSubmit={simulate}>
         {authRequired && !apiKey && <p className="source-notice access-notice">Risk comparison is protected. Paste a viewer key (or another authorized key) under <a href="#operations">Operations and access</a>, then compare again.</p>}
         <div className="simulator-step"><span aria-hidden="true">1</span><div><strong>Choose a wallet</strong><p>Enter the sender you want to test.</p></div></div>
@@ -158,7 +185,7 @@ function ReplayEvent({ item }) {
   const data = item.data
   return <div className="replay-evidence">
     {item.kind === 'decision' ? <dl><div><dt>Wallet</dt><dd>{data.address}</dd></div><div><dt>Estimated risk</dt><dd>{percent(data.fraud_probability)}</dd></div><div><dt>Trust score</dt><dd>{data.trust_score ?? data.projected_trust_score ?? '—'}</dd></div><div><dt>Recommendation</dt><dd>{data.risk_action || 'Observe'}</dd></div></dl>
-      : <dl><div><dt>From</dt><dd>{data.sender}</dd></div><div><dt>To</dt><dd>{data.recipient || 'Contract creation'}</dd></div><div><dt>Value</dt><dd>{data.value} {data.kind === 'native' ? 'ETH' : 'raw token units'}</dd></div><div><dt>Execution</dt><dd>{data.status === 1 ? 'Succeeded' : data.status === 0 ? 'Failed' : 'Receipt unavailable'}</dd></div></dl>}
+      : <dl><div><dt>From</dt><dd>{data.sender}</dd></div><div><dt>To</dt><dd>{data.recipient || 'Contract creation'}</dd></div><div><dt>Value</dt><dd>{data.value} {data.kind === 'native' ? 'ETH' : 'token units'}</dd></div><div><dt>Execution</dt><dd>{data.kind === 'erc20' ? 'Transfer log recorded' : data.status === 1 ? 'Succeeded' : data.status === 0 ? 'Failed' : 'Receipt unavailable'}</dd></div></dl>}
     <details><summary>View raw evidence</summary><pre>{JSON.stringify(data, null, 2)}</pre></details>
   </div>
 }

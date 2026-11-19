@@ -1,9 +1,16 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 const Intelligence = lazy(() => import('./Intelligence'))
-import { readResponse, formatApiDate } from './api'
+import { readResponse, formatApiDate, blockAge } from './api'
+import CaseDesk from './CaseDesk'
+import useCaseDesk from './useCaseDesk'
+import { walletAddress } from './investigation'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const THEMES = {
+  light: { label: 'Indigo light', background: '#f2f3f7' },
+  dark: { label: 'Indigo dark', background: '#111216' },
+}
 const MODES = {
   simulated: { label: 'Dataset replay', note: 'Historical labelled wallets', interval: 1200 },
   pending: { label: 'Pending watch', note: 'Provider-visible mempool', interval: 2000 },
@@ -13,7 +20,7 @@ const MODES = {
 function initialTheme() {
   try {
     const saved = localStorage.getItem('dwts-theme')
-    if (saved === 'light' || saved === 'dark') return saved
+    if (Object.hasOwn(THEMES, saved)) return saved
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   } catch { return 'light' }
 }
@@ -42,6 +49,8 @@ export default function App() {
   const [walletQuery, setWalletQuery] = useState('')
   const [walletResults, setWalletResults] = useState([])
   const [walletDetail, setWalletDetail] = useState(null)
+  const [inspectionTarget, setInspectionTarget] = useState(null)
+  const desk = useCaseDesk()
   const screenRef = useRef(screen)
   screenRef.current = screen
   const walletRequest = useRef(0)
@@ -49,6 +58,7 @@ export default function App() {
   const [reviewing, setReviewing] = useState(false)
   const blockRef = useRef(null)
   const blockHashRef = useRef(null)
+  const replayItem = useRef(0)
   const modeRef = useRef('simulated')
   const latest = feed[0]
   const decisionEvidence = screenResult || latest
@@ -57,6 +67,7 @@ export default function App() {
   const chart = [...feed].reverse().map((item, index) => ({ event: index + 1, score: item.trust_score, risk: Math.round(item.fraud_probability * 100) }))
   const providerReady = Boolean(system?.connected)
   const ingestion = system?.ingestion
+  const chainGap = ingestion?.latest_skipped_range
   const chainError = liveError || ingestion?.error || system?.error
   const chainStatus = statusError ? 'Status unavailable' : !system ? 'Checking'
     : !system.configured ? 'Not configured' : !providerReady ? 'Provider offline'
@@ -93,7 +104,8 @@ export default function App() {
         if (payload.error) throw new Error(payload.error)
         setFeed(payload.transactions)
       } else {
-        setFeed(items => [payload, ...items].slice(0, 24))
+        const entry = { ...payload, displayKey: ++replayItem.current }
+        setFeed(items => [entry, ...items].slice(0, 24))
       }
       setError('')
       return true
@@ -140,19 +152,16 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#111216' : '#f2f3f7')
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEMES[theme].background)
   }, [theme])
 
-  function toggleTheme() {
-    setTheme(current => {
-      const next = current === 'dark' ? 'light' : 'dark'
-      try { localStorage.setItem('dwts-theme', next) } catch { /* Theme still works for this visit. */ }
-      return next
-    })
+  function chooseTheme(next) {
+    setTheme(next)
+    try { localStorage.setItem('dwts-theme', next) } catch { /* Theme still works for this visit. */ }
   }
 
   useEffect(() => {
-    const ids = ['overview', 'screening', 'investigation', 'intelligence', 'operations']
+    const ids = ['overview', 'screening', 'investigation', 'case-desk', 'intelligence', 'operations']
     function updateActiveSection() {
       const offset = 170
       const visible = ids.filter(id => document.getElementById(id)?.getBoundingClientRect().top <= offset)
@@ -163,6 +172,17 @@ export default function App() {
     window.addEventListener('resize', updateActiveSection)
     return () => { window.removeEventListener('scroll', updateActiveSection); window.removeEventListener('resize', updateActiveSection) }
   }, [])
+
+  useEffect(() => {
+    const selected = document.querySelector('.section-nav [aria-current="location"]')
+    if (!selected) return
+    const navigation = selected.parentElement
+    const item = selected.getBoundingClientRect()
+    const bounds = navigation.getBoundingClientRect()
+    if (item.right > bounds.right || item.left < bounds.left) {
+      navigation.scrollLeft += item.left - bounds.left - 12
+    }
+  }, [activeSection])
 
   function selectMode(nextMode) {
     if ((nextMode === 'live' && !providerReady) || (nextMode === 'pending' && !pendingReady)) return
@@ -204,7 +224,8 @@ export default function App() {
       }
       const result = await request('/api/screen-transaction', {method: 'POST', body: JSON.stringify(payload)})
       if (screenRef.current === submitted && modeRef.current === submittedMode) {
-        setScreenResult({ ...result, address: submitted.sender, source: 'Proposed transaction' })
+        setScreenResult({ ...result, address: submitted.sender, recipient: submitted.recipient, value_eth: submitted.value_eth,
+          source: 'Proposed transaction' })
         setNotice('Screening complete. DWTS was not changed.')
       }
     } catch (exception) { if (screenRef.current === submitted && modeRef.current === submittedMode) setNotice(exception.message) }
@@ -291,6 +312,13 @@ export default function App() {
     document.getElementById('screening')?.scrollIntoView({behavior: 'smooth'})
   }
 
+  function saveAssessment(decision, source) {
+    if (walletAddress(decision?.address)) {
+      desk.open(decision.address, decision, source)
+      document.getElementById('case-desk')?.scrollIntoView()
+    }
+  }
+
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand-lockup"><LogoMark/><div><p>DWTS</p><span>AI Fraud Detection Layer</span></div></div>
@@ -300,12 +328,14 @@ export default function App() {
           <StatusDot active={providerReady} label="Ethereum" />
           <span className="model-stamp">MODEL {modelMetrics?.model_version?.slice(0, 8) || '—'}</span>
         </div>
-        <button className="theme-toggle" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} aria-pressed={theme === 'dark'} title={`Use ${theme === 'dark' ? 'light' : 'dark'} mode`}><span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>{theme === 'dark' ? 'Light' : 'Dark'}</button>
+        <select className="theme-picker" aria-label="Color theme" value={theme} onChange={event => chooseTheme(event.target.value)}>
+          {Object.entries(THEMES).map(([value, option]) => <option key={value} value={value}>{option.label}</option>)}
+        </select>
       </div>
     </header>
 
     <a className="skip-link" href="#workspace">Skip to workspace</a>
-    <nav className="section-nav" aria-label="Workspace sections">{[['overview', 'Overview'], ['screening', 'Screen transaction'], ['investigation', 'Wallet history'], ['intelligence', 'Intelligence'], ['operations', 'Operations']].map(([id, label]) => <a key={id} href={`#${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={() => setActiveSection(id)}>{label}</a>)}</nav>
+    <nav className="section-nav" aria-label="Workspace sections">{[['overview', 'Overview'], ['screening', 'Screen transaction'], ['investigation', 'Wallet history'], ['case-desk', 'Case desk'], ['intelligence', 'Intelligence'], ['operations', 'Operations']].map(([id, label]) => <a key={id} href={`#${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={() => setActiveSection(id)}>{label}</a>)}</nav>
     <main className="workspace" id="workspace">
       <section className="command-header" id="overview">
         <div><h1>Understand a wallet’s risk</h1><p className="lede">Check a transfer, explore wallet activity, and understand what raised a concern.</p></div>
@@ -317,19 +347,25 @@ export default function App() {
         </div>
       </section>
 
-      <aside className="workspace-guide"><strong>New here? Start with Dataset replay.</strong><p>Press Start to see example wallet assessments, then use an event to fill the transaction form. Trust is scored out of 100: higher is better. Estimated fraud risk is a model prediction, not proof of fraud.</p></aside>
+      <aside className="workspace-guide"><strong>Try Dataset replay for a quick demo.</strong><p>Press Start to see sample wallet assessments. Trust is scored out of 100, and risk is a model estimate.</p></aside>
 
       {(live || pending || error) && <div className={`source-notice ${error ? 'notice-error' : ''}`} role={error ? 'alert' : 'status'}><span className="pulse-dot" />{error || (live ? `Confirmed-chain mode. ${block ? `Block ${block}. ` : ''}Cold wallets remain in Observe.` : 'Pending decisions are advisory and never change DWTS before confirmation.')}</div>}
 
       <section className="panel chain-health" aria-label="Confirmed chain health">
-        <h2>Confirmed chain health</h2>
-        <div className="operations-grid">
-          <SystemMetric label="Ingestion" value={chainStatus} />
-          <SystemMetric label="Provider head" value={system?.latest_block?.toLocaleString() ?? '—'} />
-          <SystemMetric label="Last processed block" value={ingestion?.last_confirmed_block?.toLocaleString() ?? '—'} />
-          <SystemMetric label="Blocks behind confirmed head" value={ingestion?.blocks_behind?.toLocaleString() ?? '—'} />
+        <div className="chain-summary">
+          <div><h2>Confirmed chain health</h2><p>{ingestion?.last_confirmed_timestamp != null
+            ? `Last processed block was mined ${blockAge(ingestion.last_confirmed_timestamp).toLowerCase()}.`
+            : providerReady ? 'Waiting for the first confirmed block.' : 'Ethereum Mainnet data appears here when a provider is connected.'}</p></div>
+          <div className="chain-state"><strong>{chainStatus}</strong>{ingestion?.blocks_behind > 0 && <span>{ingestion.blocks_behind.toLocaleString()} blocks behind</span>}</div>
         </div>
-        {ingestion?.last_confirmed_timestamp != null && <p>Last processed block time: {formatDate(ingestion.last_confirmed_timestamp * 1000)} · {Math.max(0, Math.floor((Date.now() / 1000 - ingestion.last_confirmed_timestamp) / 60))} min old</p>}
+        {chainGap && <p className="chain-history-note">Live monitoring resumed near the current head. The retained history has a gap.</p>}
+        <details className="chain-details"><summary>Block details</summary><dl>
+          <div><dt>Latest from provider</dt><dd>{system?.latest_block?.toLocaleString() ?? '—'}</dd></div>
+          <div><dt>Last processed block</dt><dd>{ingestion?.last_confirmed_block?.toLocaleString() ?? '—'}</dd></div>
+          <div><dt>Block timestamp</dt><dd>{ingestion?.last_confirmed_timestamp != null ? formatDate(ingestion.last_confirmed_timestamp * 1000) : '—'}</dd></div>
+          <div><dt>Confirmation depth</dt><dd>{ingestion?.confirmation_depth ?? '—'}</dd></div>
+          {chainGap && <div><dt>Latest skipped range</dt><dd>{chainGap.from_block.toLocaleString()}–{chainGap.to_block.toLocaleString()}</dd></div>}
+        </dl></details>
         {(statusError || chainError) && <p className="source-notice notice-error" role="status">{statusError || chainError} {live && feed.length > 0 && 'Displayed decisions may be stale.'}</p>}
       </section>
 
@@ -340,6 +376,10 @@ export default function App() {
         <button className={`stream-control ${running ? 'is-running' : ''}`} type="button" onClick={() => setRunning(value => !value)}><span className="control-glyph" aria-hidden="true">{running ? 'Ⅱ' : '▶'}</span><span>{running ? 'Pause' : 'Start'}<small>{MODES[mode].label}</small></span></button>
       </section>
 
+      {walletAddress(latest?.address) && <div className="feed-case-actions">
+        <button type="button" onClick={() => saveAssessment(latest, mode)}>Save current assessment</button>
+        <a href="#case-desk">Open case desk</a>
+      </div>}
       <section className="monitor-grid">
         <div className="panel trace-panel">
           <PanelHeading kicker="DECISION TRACE" title="Latest observed wallets" meta={`${feed.length} events in view`} />
@@ -351,7 +391,7 @@ export default function App() {
 
         <div className="panel feed-panel">
           <PanelHeading kicker="EVENT LEDGER" title={live ? 'Confirmed transactions' : pending ? 'Pending transactions' : 'Historical snapshots'} meta={running ? 'Receiving' : 'Paused'} />
-          <div className="event-ledger">{feed.length ? feed.map(item => <article className={`event-row ${screen.sender === item.address ? 'is-selected' : ''}`} key={item.sequence}>
+          <div className="event-ledger">{feed.length ? feed.map(item => <article className={`event-row ${screen.sender === item.address ? 'is-selected' : ''}`} key={item.displayKey ?? item.sequence}>
             <button className="event-address" type="button" aria-pressed={screen.sender === item.address} onClick={() => loadEvent(item)} title="Load this event into pre-broadcast screening"><span className="address-ident" aria-hidden="true">{item.address.slice(2, 4).toUpperCase()}</span><span><strong>{shortAddress(item.address)}</strong><small>{live ? `Block ${item.block_number} · ${item.value_eth} ETH` : pending ? `${item.status} · ${item.value_eth} ETH` : `Snapshot ${item.sequence} · label ${item.actual_label}`}</small></span></button>
             <div className="event-risk"><strong>{(item.fraud_probability * 100).toFixed(1)}%</strong><RiskBadge action={item.risk_action} /></div>
             {item.contract_call && <p className="contract-note">{item.contract_call.method} · {item.contract_call.selector}</p>}
@@ -371,7 +411,7 @@ export default function App() {
             <details className="advanced-fields"><summary>Advanced transaction fields</summary><div className="field-pair"><Field label="Gas price" hint="wei"><input type="number" min="0" placeholder="Optional" value={screen.gas_price_wei} onChange={event => setScreen({...screen, gas_price_wei: event.target.value})}/></Field><Field label="Nonce"><input type="number" min="0" placeholder="Optional" value={screen.nonce} onChange={event => setScreen({...screen, nonce: event.target.value})}/></Field></div><Field label="Contract calldata" hint="Hex encoded"><input pattern="0x[a-fA-F0-9]*" value={screen.input} onChange={event => setScreen({...screen, input: event.target.value})}/></Field></details>
             <button className="primary-action" disabled={screening} type="submit">{screening ? 'Evaluating…' : 'Run screening'}<span aria-hidden="true">→</span></button>
           </form>
-          {screenResult && <div className="screen-result"><div><p>Screening result</p><RiskBadge action={screenResult.risk_action} large /></div><div className="result-numbers"><span><small>Trust</small>{screenResult.projected_trust_score}</span><span><small>Fraud</small>{(screenResult.fraud_probability * 100).toFixed(1)}%</span><span><small>Evidence</small>{screenResult.observed_events} events</span></div>{screenResult.contract_call && <p className="decoded-call">Decoded call: {screenResult.contract_call.method} · {screenResult.contract_call.selector}</p>}<p className="scope-warning">Uses a wallet-behavior preview. It is not a transaction-trained classifier and does not update DWTS.</p></div>}
+          {screenResult && <div className="screen-result"><div><p>Screening result</p><RiskBadge action={screenResult.risk_action} large /></div><div className="result-numbers"><span><small>Trust</small>{screenResult.projected_trust_score}</span><span><small>Fraud</small>{(screenResult.fraud_probability * 100).toFixed(1)}%</span><span><small>Evidence</small>{screenResult.observed_events} events</span></div>{screenResult.contract_call && <p className="decoded-call">Decoded call: {screenResult.contract_call.method} · {screenResult.contract_call.selector}</p>}<button type="button" onClick={() => saveAssessment(screenResult, 'screening')}>Save screening assessment</button><p className="scope-warning">Uses a wallet-behavior preview. It is not a transaction-trained classifier and does not update DWTS.</p></div>}
         </div>
 
         <div className="panel evidence-panel">
@@ -386,7 +426,9 @@ export default function App() {
         <div className="investigation-grid"><div className="wallet-results">{walletResults.length ? walletResults.map(item => <button type="button" key={item.address} className={walletDetail?.address === item.address ? 'selected' : ''} onClick={() => inspectWallet(item.address)}><span className="address-ident">{item.address.slice(2, 4).toUpperCase()}</span><span><strong>{shortAddress(item.address)}</strong><small>Updated {formatDate(item.updated_at)}</small></span><span className="result-score">{item.score}<RiskBadge action={item.risk_action}/></span></button>) : <EmptyState title="No investigation loaded" body="Search blank to see recent wallets, or enter part of an address." />}</div><div className="wallet-case">{walletDetail ? <><div className="case-heading"><div><p>Wallet address</p><strong>{walletDetail.address}</strong></div><button type="button" onClick={exportWallet}>Export evidence CSV</button></div><div className="case-score"><span>{walletDetail.score}</span><div><strong>Current trust score</strong><small>{walletDetail.history_total} recorded decisions</small></div></div><div className="history-list">{walletDetail.history.map(item => <div key={item.id}><span className="history-line"/><p><strong>{item.score}</strong><small>{formatDate(item.created_at)}</small></p><RiskBadge action={item.action}/><span>{(item.fraud_probability * 100).toFixed(1)}% fraud</span></div>)}</div><div className="pagination"><button disabled={walletDetail.history_page === 1} onClick={() => inspectWallet(walletDetail.address, walletDetail.history_page - 1)}>Newer scores</button><span>Page {walletDetail.history_page} of {Math.max(1, Math.ceil(walletDetail.history_total / 12))}</span><button disabled={walletDetail.history_page * 12 >= walletDetail.history_total} onClick={() => inspectWallet(walletDetail.address, walletDetail.history_page + 1)}>Older scores</button></div></> : <EmptyState title="Select a wallet case" body="Its score history and export controls will appear here." />}</div></div>
       </section>
 
-      <Suspense fallback={<p role="status">Loading analysis tools…</p>}><Intelligence api={API} apiKey={apiKey} authRequired={Boolean(system?.authentication_required)} mode={mode} screen={screen} latest={latest}/></Suspense>
+      <CaseDesk {...desk} onFollow={desk.open} feed={feed} onInspect={address => setInspectionTarget({ address })} />
+      <Suspense fallback={<p role="status">Loading analysis tools…</p>}><Intelligence api={API} apiKey={apiKey} authRequired={Boolean(system?.authentication_required)} mode={mode} screen={screen} latest={latest}
+        cases={desk.cases} inspectionTarget={inspectionTarget} onSaveAssessment={saveAssessment} onFollow={address => { desk.open(address); document.getElementById('case-desk')?.scrollIntoView() }} /></Suspense>
 
       <section className="panel operations-panel" id="operations">
         <div className="operations-head"><PanelHeading kicker="SYSTEM ASSURANCE" title="Operations and access" meta={apiKey ? 'Credential supplied' : 'Public view'} /><button type="button" onClick={loadOperations} disabled={loadingOperations}>{loadingOperations ? 'Refreshing…' : 'Refresh protected evidence'}</button></div>

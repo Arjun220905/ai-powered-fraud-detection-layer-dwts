@@ -343,3 +343,41 @@ def test_health_and_stream(monkeypatch):
             os.environ.pop("VIEWER_API_KEY", None)
         else:
             os.environ["VIEWER_API_KEY"] = previous_viewer
+
+
+def test_confirmed_chain_resumes_recently_or_catches_up_in_order(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from app import main
+
+    last = {"number": 10, "hash": "0x0a", "processed": True}
+    gaps = []
+    seen = []
+
+    def process(_app, block):
+        seen.append(block["number"])
+        last.update(block)
+
+    monkeypatch.setattr(main, "current_block_number", lambda: 100)
+    monkeypatch.setattr(main, "block_hash", lambda number: f"0x{number:02x}")
+    monkeypatch.setattr(main, "block_transactions", lambda number, limit: {
+        "number": number, "hash": f"0x{number:02x}", "parent_hash": f"0x{number - 1:02x}",
+    })
+    monkeypatch.setattr(main, "process_live_block", process)
+    store = SimpleNamespace(last_block=lambda: last, acquire_lease=lambda *args: True,
+                            save_metadata=lambda key, value: gaps.append((key, value)))
+    state = SimpleNamespace(store=store, live_confirmations=2, live_backfill_blocks=2,
+                            live_max_catchup_blocks=2, live_resume_max_gap=10,
+                            worker_id="test", live_lease_seconds=60)
+    app = SimpleNamespace(state=state)
+    asyncio.run(main.ingest_live_blocks(app))
+    assert seen == [97, 98]
+    assert gaps == [("live_skipped_range", {"from_block": 11, "to_block": 96})]
+
+    seen.clear()
+    gaps.clear()
+    last.update(number=10, hash="0x0a")
+    state.live_resume_max_gap = 0
+    asyncio.run(main.ingest_live_blocks(app))
+    assert seen == [11, 12]
+    assert not gaps
